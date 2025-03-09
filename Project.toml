@@ -1,0 +1,14 @@
+name = "ThinWgpu"
+uuid = "2c648d6d-e328-439e-846d-93da65c15c90"
+authors = ["alex "]
+version = "0.1.0"
+
+[deps]
+CEnum = "fa961155-64e5-5f13-b03f-caf6b980ea82"
+GLFW = "f7f18e0c-5ee9-5ccd-a5bf-e8befd85ed98"
+WGPUNative = "c14bfd16-04f9-4c2f-a915-b355584b5509"
+
+[compat]
+CEnum = "0.5.0"
+GLFW = "3.4.3"
+WGPUNative = "0.1.4"
