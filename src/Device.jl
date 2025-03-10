@@ -75,3 +75,40 @@ function GetWGPUDevice(adapter::WGPUAdapter, label::String)::WGPUDevice
     GC.@preserve label wgpuAdapterRequestDevice(adapter, deviceDesc, callback, device)
     device[]
 end
+
+mutable struct Device
+    instance::WGPUInstance
+    adapter::WGPUAdapter
+    device::WGPUDevice
+    queue::WGPUQueue
+    function Device(logLevel::WGPULogLevel = WGPULogLevel_Warn)
+        # the @cfunction value needs to stay local because otherwise the Julia debugger breaks
+        CLogCallback = @cfunction(LogCallback, Cvoid, (WGPULogLevel, Ptr{Cchar}))
+        wgpuSetLogCallback(CLogCallback, C_NULL)
+        wgpuSetLogLevel(logLevel)
+
+        dev = new(wgpuCreateInstance(Ref(WGPUInstanceDescriptor(C_NULL))), C_NULL, C_NULL, C_NULL)
+        finalizer(device_finalize, dev)
+    end
+end
+
+function device_finalize(device::Device)
+    if device.queue != C_NULL
+        wgpuQueueRelease(device.queue)
+        device.queue = C_NULL
+    end
+    if device.device != C_NULL
+        wgpuDeviceRelease(device.device)
+        device.device = C_NULL
+    end
+    if device.adapter != C_NULL
+        wgpuAdapterRelease(device.adapter)
+        device.adapter = C_NULL
+    end
+    if device.instance != C_NULL
+        wgpuInstanceRelease(device.instance)
+        device.instance = C_NULL
+    end
+    wgpuSetLogCallback(C_NULL, C_NULL)
+end
+

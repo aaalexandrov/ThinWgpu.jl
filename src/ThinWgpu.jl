@@ -6,8 +6,8 @@ using CEnum
 using LinearAlgebra
 
 include("Util.jl") 
-include("Surface.jl")
 include("Device.jl")
+include("Surface.jl")
 include("Shader.jl")
 include("Resources.jl")
 
@@ -69,75 +69,55 @@ const triVertices = [
     VertexPos(( 0.0,  0.5, 0), (0, 0, 1), (1, 1)),
 ]
 
-
-
-function LogCallback(logLevel::WGPULogLevel, msg::Ptr{Cchar})
-    @info logLevel unsafe_string(msg)
-end
-
 function main()
+    windowName = "Main"
+
     GLFW.WindowHint(GLFW.CLIENT_API, GLFW.NO_API)
-    window = GLFW.CreateWindow(800, 800, "Win32 Kek")
+    window = GLFW.CreateWindow(800, 800, windowName)
 
-    # the @cfunction value needs to stay local because otherwise the Julia debugger breaks
-    CLogCallback = @cfunction(LogCallback, Cvoid, (WGPULogLevel, Ptr{Cchar}))
-    wgpuSetLogCallback(CLogCallback, C_NULL)
-    wgpuSetLogLevel(WGPULogLevel_Warn)
+    device = Device()
+    surface = Surface(device, window, windowName)
+    init(device, surface)
 
-    inst = wgpuCreateInstance(Ref(WGPUInstanceDescriptor(C_NULL)))
-
-    surface = CreateOSSurface(inst, window, "Keke")
-    adapter = GetWGPUAdapter(inst, surface)
-
-    adapterProps = GetWGPUAdapterProperties(adapter)
-    @info unsafe_string(adapterProps[].name)
-
-    device = GetWGPUDevice(adapter, "wgpu.jl")
-    queue = wgpuDeviceGetQueue(device)
-
-    surfFormat = wgpuSurfaceGetPreferredFormat(surface, adapter)
-    @info "Surface format $surfFormat"
-
-    bindGroupLayout = CreateBindGroupLayout(device, shaderName, WGPUShaderStageFlags(WGPUShaderStage_Vertex | WGPUShaderStage_Fragment), Any[
+    bindGroupLayout = CreateBindGroupLayout(device.device, shaderName, WGPUShaderStageFlags(WGPUShaderStage_Vertex | WGPUShaderStage_Fragment), Any[
         WGPUBufferBindingLayout(C_NULL, WGPUBufferBindingType_Uniform, false, 0),
         WGPUSamplerBindingLayout(C_NULL, WGPUSamplerBindingType_Filtering),
         WGPUTextureBindingLayout(C_NULL, WGPUTextureSampleType_Float, WGPUTextureViewDimension_2D, false),
     ])
 
-    pipeline = CreateWGSLRenderPipeline(device, shaderName, shaderSrc, eltype(triVertices), [bindGroupLayout], surfFormat)
+    pipeline = CreateWGSLRenderPipeline(device.device, shaderName, shaderSrc, eltype(triVertices), [bindGroupLayout], surface.format)
 
     uniforms = Ref{Uniforms}()
     set_ptr_field!(uniforms, :worldViewProj, tuple(reshape(Matrix{Float32}(I, 4, 4), 16)...))
     
-    uniformBuffer = CreateBuffer(device, queue, "uniforms", WGPUBufferUsageFlags(WGPUBufferUsage_Uniform), uniforms)
-    vertexBuffer = CreateBuffer(device, queue, "triVerts", WGPUBufferUsageFlags(WGPUBufferUsage_Vertex), triVertices)
+    uniformBuffer = CreateBuffer(device.device, device.queue, "uniforms", WGPUBufferUsageFlags(WGPUBufferUsage_Uniform), uniforms)
+    vertexBuffer = CreateBuffer(device.device, device.queue, "triVerts", WGPUBufferUsageFlags(WGPUBufferUsage_Vertex), triVertices)
 
-    samplerLinearRepeat = CreateSampler(device, "linearRepeat", WGPUAddressMode_Repeat, WGPUFilterMode_Linear)
-    texture = CreateTexture(device, queue, "tex2D", WGPUTextureUsage_TextureBinding, [ntuple(i->UInt8((isodd(x+y) || i > 3) * 255), 4) for x=1:4, y=1:4])
+    samplerLinearRepeat = CreateSampler(device.device, "linearRepeat", WGPUAddressMode_Repeat, WGPUFilterMode_Linear)
+    texture = CreateTexture(device.device, device.queue, "tex2D", WGPUTextureUsage_TextureBinding, [ntuple(i->UInt8((isodd(x+y) || i > 3) * 255), 4) for x=1:4, y=1:4])
     textureView = wgpuTextureCreateView(texture, C_NULL)
 
-    bindGroup = CreateBindGroup(device, "bindGroup", bindGroupLayout, Any[uniformBuffer, samplerLinearRepeat, textureView])
+    bindGroup = CreateBindGroup(device.device, "bindGroup", bindGroupLayout, Any[uniformBuffer, samplerLinearRepeat, textureView])
 
     startTime = time()
     frames = 0
-    (winWidth, winHeight) = (-1, -1)    
     while !GLFW.WindowShouldClose(window)
-        (newWidth, newHeight) = GLFW.GetWindowSize(window)
-        if newWidth != winWidth || newHeight != winHeight
-            (winWidth, winHeight) = (newWidth, newHeight)
-            ConfigureWGPUSurface(surface, device, (UInt32(winWidth), UInt32(winHeight)), surfFormat)
+        winSize = GLFW.GetWindowSize(window)
+        winSize = (winSize.width, winSize.height)
+        if winSize != surface.size
+            configure(surface, device, winSize, surface.presentMode)
         end
 
-        texView = CreateSurfaceCurrentTextureView(surface)
+        texView = CreateSurfaceCurrentTextureView(surface.surface)
         if texView != C_NULL
             # updates
             rot = rotation_z(Float32((time() - startTime) % 2pi))
             Base.memmove(ptr_to_field(uniforms, :worldViewProj), pointer(rot), sizeof(rot))
-            wgpuQueueWriteBuffer(queue, uniformBuffer, 0, uniforms, sizeof(uniforms))
+            wgpuQueueWriteBuffer(device.queue, uniformBuffer, 0, uniforms, sizeof(uniforms))
 
             label = "cmds"
             encoderDesc = Ref(WGPUCommandEncoderDescriptor(C_NULL, pointer(label)))
-            encoder = GC.@preserve label wgpuDeviceCreateCommandEncoder(device, encoderDesc)
+            encoder = GC.@preserve label wgpuDeviceCreateCommandEncoder(device.device, encoderDesc)
 
             colorAttachments = [WGPURenderPassColorAttachment(
                 C_NULL,
@@ -172,15 +152,15 @@ function main()
             wgpuCommandEncoderRelease(encoder)
 
             cmds = [cmdBuffer]
-            wgpuQueueSubmit(queue, length(cmds), pointer(cmds, 1))
+            wgpuQueueSubmit(device.queue, length(cmds), pointer(cmds, 1))
             wgpuCommandBufferRelease(cmdBuffer)
 
             wgpuTextureViewRelease(texView)
-            wgpuSurfacePresent(surface)
+            wgpuSurfacePresent(surface.surface)
             
             frames += 1
         end
-        wgpuDevicePoll(device, false, C_NULL)
+        wgpuDevicePoll(device.device, false, C_NULL)
         GLFW.PollEvents()
     end
     runTime = time() - startTime
@@ -194,13 +174,9 @@ function main()
     wgpuBufferRelease(vertexBuffer)
     wgpuRenderPipelineRelease(pipeline)
     wgpuBindGroupLayoutRelease(bindGroupLayout)
-    wgpuQueueRelease(queue)
-    wgpuDeviceRelease(device)
-    wgpuAdapterRelease(adapter)
-    wgpuSurfaceRelease(surface)
-    wgpuInstanceRelease(inst)
 
-    wgpuSetLogCallback(C_NULL, C_NULL)
+    finalize(surface)
+    finalize(device)
 
     GLFW.DestroyWindow(window)
 end

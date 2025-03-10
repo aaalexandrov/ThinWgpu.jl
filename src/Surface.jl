@@ -47,7 +47,7 @@ function CreateOSSurface(wgpuInst::WGPUInstance, window::GLFW.Window, label::Str
     GC.@preserve osDesc label wgpuInstanceCreateSurface(wgpuInst, surfDesc)
 end
 
-function ConfigureWGPUSurface(surface::WGPUSurface, device::WGPUDevice, size::NTuple{2, UInt32}, surfFormat::WGPUTextureFormat)
+function ConfigureWGPUSurface(surface::WGPUSurface, device::WGPUDevice, size::NTuple{2, Int32}, surfFormat::WGPUTextureFormat, presentMode::WGPUPresentMode)
     viewFormats = [surfFormat]
 
     config = Ref(WGPUSurfaceConfiguration(
@@ -58,9 +58,9 @@ function ConfigureWGPUSurface(surface::WGPUSurface, device::WGPUDevice, size::NT
         length(viewFormats),
         pointer(viewFormats, 1),
         WGPUCompositeAlphaMode_Opaque,
-        size[1],
-        size[2],
-        WGPUPresentMode_Fifo
+        UInt32(size[1]),
+        UInt32(size[2]),
+        presentMode
     ))
 
     GC.@preserve viewFormats wgpuSurfaceConfigure(surface, config)
@@ -79,4 +79,53 @@ function CreateSurfaceCurrentTextureView(surface::WGPUSurface)
     @assert(surfTex[].status == WGPUSurfaceGetCurrentTextureStatus_Success)
 
     wgpuTextureCreateView(surfTex[].texture, C_NULL)
+end
+
+mutable struct Surface
+    surface::WGPUSurface
+    name::String
+    format::WGPUTextureFormat
+    presentMode::WGPUPresentMode
+    size::NTuple{2, Int32}
+    Surface(wgpuSurf::WGPUSurface, name::String) = finalizer(surface_finalize, new(
+        wgpuSurf, 
+        name, 
+        WGPUTextureFormat_Undefined, 
+        WGPUPresentMode_Fifo, 
+        (-1, -1)
+    ))
+end
+
+function Surface(device, window::GLFW.Window, name::String)
+    Surface(CreateOSSurface(device.instance, window, name), name)
+end
+
+function surface_finalize(surface::Surface)
+    if surface.surface != C_NULL
+        wgpuSurfaceRelease(surface.surface)
+        surface.surface = C_NULL
+    end
+end
+
+function configure(surface::Surface, device::Device, size::NTuple{2, Int32}, presentMode::WGPUPresentMode)
+    surface.size = size
+    surface.presentMode = presentMode
+    ConfigureWGPUSurface(surface.surface, device.device, surface.size, surface.format, surface.presentMode)
+end
+
+function init(device::Device, surface::Surface)
+    @assert(device.adapter == C_NULL)
+    @assert(device.device == C_NULL)
+    @assert(device.queue == C_NULL)
+
+    device.adapter = GetWGPUAdapter(device.instance, surface.surface)
+
+    adapterProps = GetWGPUAdapterProperties(device.adapter)
+    @info unsafe_string(adapterProps[].name)
+
+    device.device = GetWGPUDevice(device.adapter, surface.name)
+    device.queue = wgpuDeviceGetQueue(device.device)
+
+    surface.format = wgpuSurfaceGetPreferredFormat(surface.surface, device.adapter)
+    @info "Surface format $(surface.format)"
 end
