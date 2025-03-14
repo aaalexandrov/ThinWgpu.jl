@@ -12,6 +12,11 @@ function CreateWGSLShaderModule(device::WGPUDevice, label::String, source::Strin
     GC.@preserve label source sourceDesc wgpuDeviceCreateShaderModule(device, shaderDesc)
 end
 
+function CreateBindGroupLayout(device::WGPUDevice; bindingLayoutDescs...)::WGPUBindGroupLayout
+    bindGroupDesc = ComplexStruct(WGPUBindGroupLayoutDescriptor; bindingLayoutDescs...)
+    GC.@preserve bindGroupDesc wgpuDeviceCreateBindGroupLayout(device, bindGroupDesc.obj)
+end
+
 function GetVertexFormat(::Type{T}, unorm::Bool = false)::WGPUVertexFormat where T
     local baseType
     dim = fieldcount(T)
@@ -62,34 +67,6 @@ function GetVertexLayout(::Type{T}, attrs::Vector{WGPUVertexAttribute})::WGPUVer
         length(attrs),
         pointer(attrs, 1)
     )
-end
-
-function CreateBindGroupLayout(device::WGPUDevice, name::String, stageVisibility::WGPUShaderStageFlags, bindingLayouts::Vector{Any})::WGPUBindGroupLayout
-    groupLayoutEntries = WGPUBindGroupLayoutEntry[]
-    resize!(groupLayoutEntries, length(bindingLayouts))
-    Base.memset(pointer(groupLayoutEntries, 1), 0, sizeof(groupLayoutEntries))
-    for i in 1:length(bindingLayouts)
-        entry = pointer(groupLayoutEntries, i)
-        set_ptr_field!(entry, :binding, i - 1)
-        set_ptr_field!(entry, :visibility, stageVisibility)
-        bindType = typeof(bindingLayouts[i])
-        typeFound = false
-        for field in (:buffer, :sampler, :texture, :storageTexture)
-            if bindType == fieldtype(WGPUBindGroupLayoutEntry, field)
-                set_ptr_field!(entry, field, bindingLayouts[i])
-                typeFound = true
-                break
-            end
-        end
-        @assert(typeFound)
-    end
-    bindGroupDesc = Ref(WGPUBindGroupLayoutDescriptor(
-        C_NULL,
-        pointer(name),
-        length(groupLayoutEntries),
-        pointer(groupLayoutEntries, 1)
-    ))
-    GC.@preserve name groupLayoutEntries wgpuDeviceCreateBindGroupLayout(device, bindGroupDesc)
 end
 
 function CreateBindGroup(device::WGPUDevice, name::String, bindGroupLayout::WGPUBindGroupLayout, bindings::Vector{Any})::WGPUBindGroup
@@ -187,4 +164,28 @@ function CreateWGSLRenderPipeline(device::WGPUDevice, name::String, source::Stri
     wgpuShaderModuleRelease(shader)
 
     pipeline
+end
+
+abstract type PipelineBase end
+
+mutable struct Shader
+    shader::WGPUShaderModule
+    name::String
+    stages::WGPUShaderStageFlags
+    bindGroupLayouts::Vector{WGPUBindGroupLayout}
+    function Shader(device::Device, name::String, source::String, stages::WGPUShaderStageFlags, bindGroupLayoutDescs)
+        shader = CreateWGSLShaderModule(device.device, name, source)
+        bindGroupLayouts = [CreateBindGroupLayout(device.device; groupDesc...) for groupDesc in bindGroupLayoutDescs]
+        obj = new(shader, name, stages, bindGroupLayouts)
+        finalizer(shader_finalize, obj)
+    end
+end
+
+function shader_finalize(shader::Shader)
+    foreach(wgpuBindGroupLayoutRelease, shader.bindGroupLayouts)
+    resize!(shader.bindGroupLayouts, 0)
+    if shader.shader != C_NULL
+        wgpuShaderModuleRelease(shader.shader)
+        shader.shader = C_NULL
+    end
 end

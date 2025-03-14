@@ -79,11 +79,27 @@ function main()
     surface = Surface(device, window, windowName)
     init(device, surface)
 
-    bindGroupLayout = CreateBindGroupLayout(device.device, shaderName, WGPUShaderStageFlags(WGPUShaderStage_Vertex | WGPUShaderStage_Fragment), Any[
-        WGPUBufferBindingLayout(C_NULL, WGPUBufferBindingType_Uniform, false, 0),
-        WGPUSamplerBindingLayout(C_NULL, WGPUSamplerBindingType_Filtering),
-        WGPUTextureBindingLayout(C_NULL, WGPUTextureSampleType_Float, WGPUTextureViewDimension_2D, false),
-    ])
+    shaderStages = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment
+    shader = Shader(device, shaderName, shaderSrc, shaderStages, 
+        ((;
+            label=shaderName,
+            entries=(
+                (;binding=0, visibility=shaderStages, buffer=(;type=WGPUBufferBindingType_Uniform)),
+                (;binding=1, visibility=shaderStages, sampler=(;type=WGPUSamplerBindingType_Filtering)),
+                (;binding=2, visibility=shaderStages, texture=(;sampleType=WGPUTextureSampleType_Float, viewDimension=WGPUTextureViewDimension_2D)),
+            ),
+        ),),
+    )
+
+    bindGroupDesc = ComplexStruct(WGPUBindGroupLayoutDescriptor; 
+        label=shaderName,
+        entries=(
+            (;binding=0, visibility=shaderStages, buffer=(;type=WGPUBufferBindingType_Uniform)),
+            (;binding=1, visibility=shaderStages, sampler=(;type=WGPUSamplerBindingType_Filtering)),
+            (;binding=2, visibility=shaderStages, texture=(;sampleType=WGPUTextureSampleType_Float, viewDimension=WGPUTextureViewDimension_2D)),
+        ),
+    )
+    bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device.device, bindGroupDesc.obj)
 
     pipeline = CreateWGSLRenderPipeline(device.device, shaderName, shaderSrc, eltype(triVertices), [bindGroupLayout], surface.format)
 
@@ -175,6 +191,7 @@ function main()
     wgpuRenderPipelineRelease(pipeline)
     wgpuBindGroupLayoutRelease(bindGroupLayout)
 
+    finalize(shader)
     finalize(surface)
     finalize(device)
 
