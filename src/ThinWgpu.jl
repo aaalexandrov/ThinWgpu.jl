@@ -81,27 +81,24 @@ function main()
 
     shaderStages = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment
     shader = Shader(device, shaderName, shaderSrc, shaderStages, 
-        ((;
-            label=shaderName,
-            entries=(
-                (;binding=0, visibility=shaderStages, buffer=(;type=WGPUBufferBindingType_Uniform)),
-                (;binding=1, visibility=shaderStages, sampler=(;type=WGPUSamplerBindingType_Filtering)),
-                (;binding=2, visibility=shaderStages, texture=(;sampleType=WGPUTextureSampleType_Float, viewDimension=WGPUTextureViewDimension_2D)),
+        (
+            (;
+                label=shaderName,
+                entries=(
+                    (binding=0, visibility=shaderStages, buffer=(type=WGPUBufferBindingType_Uniform,)),
+                    (binding=1, visibility=shaderStages, sampler=(type=WGPUSamplerBindingType_Filtering,)),
+                    (binding=2, visibility=shaderStages, texture=(sampleType=WGPUTextureSampleType_Float, viewDimension=WGPUTextureViewDimension_2D,)),
+                ),
             ),
-        ),),
-    )
-
-    bindGroupDesc = ComplexStruct(WGPUBindGroupLayoutDescriptor; 
-        label=shaderName,
-        entries=(
-            (;binding=0, visibility=shaderStages, buffer=(;type=WGPUBufferBindingType_Uniform)),
-            (;binding=1, visibility=shaderStages, sampler=(;type=WGPUSamplerBindingType_Filtering)),
-            (;binding=2, visibility=shaderStages, texture=(;sampleType=WGPUTextureSampleType_Float, viewDimension=WGPUTextureViewDimension_2D)),
         ),
     )
-    bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device.device, bindGroupDesc.obj)
 
-    pipeline = CreateWGSLRenderPipeline(device.device, shaderName, shaderSrc, eltype(triVertices), [bindGroupLayout], surface.format)
+    pipeline = Pipeline(device, shader;
+        vertex = (buffers = [VertexPos],),
+        primitive = (topology = WGPUPrimitiveTopology_TriangleList,),
+        multisample = (count = 1, mask = typemax(UInt32)),
+        fragment = (targets = ((format = surface.format, writeMask = WGPUColorWriteMask_All,),),),
+    )
 
     uniforms = Ref{Uniforms}()
     set_ptr_field!(uniforms, :worldViewProj, tuple(reshape(Matrix{Float32}(I, 4, 4), 16)...))
@@ -113,7 +110,15 @@ function main()
     texture = CreateTexture(device.device, device.queue, "tex2D", WGPUTextureUsage_TextureBinding, [ntuple(i->UInt8((isodd(x+y) || i > 3) * 255), 4) for x=1:4, y=1:4])
     textureView = wgpuTextureCreateView(texture, C_NULL)
 
-    bindGroup = CreateBindGroup(device.device, "bindGroup", bindGroupLayout, Any[uniformBuffer, samplerLinearRepeat, textureView])
+    bindGroup = CreateBindGroup(device.device; 
+        label = "bindGroup",
+        layout = shader.bindGroupLayouts[1],
+        entries = (
+            (binding = 0, buffer = uniformBuffer, size = wgpuBufferGetSize(uniformBuffer)),
+            (binding = 1, sampler = samplerLinearRepeat),
+            (binding = 2, textureView = textureView),
+        ),
+    )
 
     startTime = time()
     frames = 0
@@ -155,7 +160,7 @@ function main()
             renderPass = GC.@preserve colorAttachments wgpuCommandEncoderBeginRenderPass(encoder, renderPassDesc)
 
             #rendering goes here
-            wgpuRenderPassEncoderSetPipeline(renderPass, pipeline)
+            wgpuRenderPassEncoderSetPipeline(renderPass, pipeline.pipeline)
             wgpuRenderPassEncoderSetBindGroup(renderPass, 0, bindGroup, 0, C_NULL)
             wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, vertexBuffer, 0, wgpuBufferGetSize(vertexBuffer))
             wgpuRenderPassEncoderDraw(renderPass, 3, 1, 0, 0)
@@ -188,9 +193,8 @@ function main()
     wgpuSamplerRelease(samplerLinearRepeat)
     wgpuBufferRelease(uniformBuffer)
     wgpuBufferRelease(vertexBuffer)
-    wgpuRenderPipelineRelease(pipeline)
-    wgpuBindGroupLayoutRelease(bindGroupLayout)
 
+    finalize(pipeline)
     finalize(shader)
     finalize(surface)
     finalize(device)

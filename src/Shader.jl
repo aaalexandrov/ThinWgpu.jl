@@ -13,8 +13,13 @@ function CreateWGSLShaderModule(device::WGPUDevice, label::String, source::Strin
 end
 
 function CreateBindGroupLayout(device::WGPUDevice; bindingLayoutDescs...)::WGPUBindGroupLayout
-    bindGroupDesc = ComplexStruct(WGPUBindGroupLayoutDescriptor; bindingLayoutDescs...)
-    GC.@preserve bindGroupDesc wgpuDeviceCreateBindGroupLayout(device, bindGroupDesc.obj)
+    bindGroupLayoutDesc = ComplexStruct(WGPUBindGroupLayoutDescriptor; bindingLayoutDescs...)
+    GC.@preserve bindGroupLayoutDesc wgpuDeviceCreateBindGroupLayout(device, bindGroupLayoutDesc.obj)
+end
+
+function CreateBindGroup(device::WGPUDevice; bindGroupDesc...)
+    bindGroupDesc = ComplexStruct(WGPUBindGroupDescriptor; bindGroupDesc...)
+    GC.@preserve bindGroupDesc wgpuDeviceCreateBindGroup(device, bindGroupDesc.obj)
 end
 
 function GetVertexFormat(::Type{T}, unorm::Bool = false)::WGPUVertexFormat where T
@@ -69,114 +74,25 @@ function GetVertexLayout(::Type{T}, attrs::Vector{WGPUVertexAttribute})::WGPUVer
     )
 end
 
-function CreateBindGroup(device::WGPUDevice, name::String, bindGroupLayout::WGPUBindGroupLayout, bindings::Vector{Any})::WGPUBindGroup
-    bindGroupEntries = WGPUBindGroupEntry[]
-    resize!(bindGroupEntries, length(bindings))
-    Base.memset(pointer(bindGroupEntries, 1), 0, sizeof(bindGroupEntries))
-    for i in 1:length(bindings)
-        entry = pointer(bindGroupEntries, i)
-        set_ptr_field!(entry, :binding, i - 1)
-        bind = bindings[i]
-        if typeof(bind) == WGPUBuffer
-            set_ptr_field!(entry, :buffer, bind)
-            set_ptr_field!(entry, :size, wgpuBufferGetSize(bind))
-        elseif typeof(bind) == WGPUSampler
-            set_ptr_field!(entry, :sampler, bind)
-        elseif typeof(bind) == WGPUTextureView
-            set_ptr_field!(entry, :textureView, bind)
-        else
-            error("Unrecognized binding")
-        end
-    end
-    bindGroupDesc = Ref(WGPUBindGroupDescriptor(
-        C_NULL,
-        pointer(name),
-        bindGroupLayout,
-        length(bindGroupEntries),
-        pointer(bindGroupEntries, 1)
-    ))
-    GC.@preserve name bindGroupEntries wgpuDeviceCreateBindGroup(device, bindGroupDesc)
-end    
-
 const entryVs = "vs_main"
 const entryFs = "fs_main"
-
-function CreateWGSLRenderPipeline(device::WGPUDevice, name::String, source::String, vertexType::Type, bindGroupLayouts::Vector{WGPUBindGroupLayout}, surfFormat::WGPUTextureFormat)::WGPURenderPipeline
-    shader = CreateWGSLShaderModule(device, name, source)
-
-    layoutDesc = Ref(WGPUPipelineLayoutDescriptor(
-        C_NULL,
-        pointer(name),
-        length(bindGroupLayouts),
-        pointer(bindGroupLayouts, 1)
-    ))
-    pipelineLayout = GC.@preserve name bindGroupLayouts wgpuDeviceCreatePipelineLayout(device, layoutDesc)
-
-    colorTargets = [WGPUColorTargetState(
-        C_NULL,
-        surfFormat,
-        C_NULL,
-        WGPUColorWriteMask_All
-    )]
-    fragmentState = Ref(WGPUFragmentState(
-        C_NULL,
-        shader,
-        pointer(entryFs),
-        0,
-        C_NULL,
-        length(colorTargets),
-        pointer(colorTargets, 1)
-    ))
-    vertexAttrs = WGPUVertexAttribute[]
-    vertexLayout = [GetVertexLayout(vertexType, vertexAttrs)]
-    pipelineDesc = Ref(WGPURenderPipelineDescriptor(
-        C_NULL,
-        pointer(name),
-        pipelineLayout,
-        WGPUVertexState(
-            C_NULL,
-            shader,
-            pointer(entryVs),
-            0,
-            C_NULL,
-            length(vertexLayout),
-            pointer(vertexLayout, 1)
-        ),
-        WGPUPrimitiveState(
-            C_NULL,
-            WGPUPrimitiveTopology_TriangleList,
-            WGPUIndexFormat_Undefined,
-            WGPUFrontFace_CCW,
-            WGPUCullMode_None
-        ),
-        C_NULL,
-        WGPUMultisampleState(
-            C_NULL,
-            1,
-            typemax(UInt32),
-            false
-        ),
-        ptr_from_ref(fragmentState)
-    ))
-    pipeline = GC.@preserve name entryVs entryFs colorTargets vertexAttrs vertexLayout fragmentState wgpuDeviceCreateRenderPipeline(device, pipelineDesc)
-
-    wgpuPipelineLayoutRelease(pipelineLayout)
-    wgpuShaderModuleRelease(shader)
-
-    pipeline
-end
-
-abstract type PipelineBase end
+const entryCs = "cs_main"
 
 mutable struct Shader
     shader::WGPUShaderModule
     name::String
     stages::WGPUShaderStageFlags
     bindGroupLayouts::Vector{WGPUBindGroupLayout}
+    pipelineLayout::WGPUPipelineLayout
     function Shader(device::Device, name::String, source::String, stages::WGPUShaderStageFlags, bindGroupLayoutDescs)
         shader = CreateWGSLShaderModule(device.device, name, source)
         bindGroupLayouts = [CreateBindGroupLayout(device.device; groupDesc...) for groupDesc in bindGroupLayoutDescs]
-        obj = new(shader, name, stages, bindGroupLayouts)
+        pipelineLayoutDesc = ComplexStruct(WGPUPipelineLayoutDescriptor;
+            label = name,
+            bindGroupLayouts = bindGroupLayouts,
+        )
+        pipelineLayout = GC.@preserve pipelineLayoutDesc wgpuDeviceCreatePipelineLayout(device.device, pipelineLayoutDesc.obj)
+        obj = new(shader, name, stages, bindGroupLayouts, pipelineLayout)
         finalizer(shader_finalize, obj)
     end
 end
@@ -187,5 +103,47 @@ function shader_finalize(shader::Shader)
     if shader.shader != C_NULL
         wgpuShaderModuleRelease(shader.shader)
         shader.shader = C_NULL
+    end
+end
+
+mutable struct Pipeline
+    pipeline::Union{WGPURenderPipeline, WGPUComputePipeline}
+    shader::Shader
+    name::String
+    function Pipeline(device::Device, shader::Shader; pipelineDesc...)
+        name = get(pipelineDesc, :name, shader.name)
+        pipeline = nothing
+        if (shader.stages & WGPUShaderStage_Compute) != 0
+            mergedDesc = recursive_merge((;pipelineDesc...), (;
+                label = name,
+                layout = shader.pipelineLayout,
+                compute = (_module = shader.shader, entryPoint = entryCs),
+            ))
+            pipeDesc = ComplexStruct(WGPUComputePipelineDescriptor; mergedDesc...)
+            pipeline = GC.@preserve pipeDesc wgpuDeviceCreateComputePipeline(device.device, pipeDesc.obj)
+        else
+            mergedDesc = recursive_merge((;pipelineDesc...), (;
+                label = name,
+                layout = shader.pipelineLayout,
+                vertex = (_module = shader.shader, entryPoint = entryVs),
+                fragment = (_module = shader.shader, entryPoint = entryFs),
+            ))
+            pipeDesc = ComplexStruct(WGPURenderPipelineDescriptor; mergedDesc...)
+            pipeline = GC.@preserve pipeDesc wgpuDeviceCreateRenderPipeline(device.device, pipeDesc.obj)
+        end
+        obj = new(pipeline, shader, name)
+        finalizer(render_pipeline_finalize, obj)
+    end
+end
+
+function render_pipeline_finalize(pipeline::Pipeline)
+    if pipeline.pipeline != C_NULL
+        if isa(pipeline.pipeline, WGPURenderPipeline)
+            wgpuRenderPipelineRelease(pipeline.pipeline)
+            pipeline.pipeline = convert(WGPURenderPipeline, C_NULL)
+        elseif isa(pipeline.pipeline, WGPUComputePipeline)
+            wgpuComputePipelineRelease(pipeline.pipeline)
+            pipeline.pipeline = convert(WGPUComputePipeline, C_NULL)
+        end
     end
 end

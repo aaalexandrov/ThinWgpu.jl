@@ -40,21 +40,49 @@ function hash_by_value(v::T, h::UInt = zero(UInt), ptrLen::UInt = one(UInt))::UI
     h
 end
 
+# copied from NamedTupleTools.jl
+struct NotPresent end
+recursive_merge(nt::NamedTuple) = nt
+recursive_merge(::NotPresent, ::NotPresent) = NotPresent()
+recursive_merge(x, ::NotPresent) = x
+recursive_merge(m::NotPresent, x) = x
+recursive_merge(x, y) = y
+function recursive_merge(nt1::NamedTuple, nt2::NamedTuple)
+    allKeys = union(keys(nt1), keys(nt2))
+    gen = Base.Generator(allKeys) do k
+        v1 = get(nt1, k, NotPresent())
+        v2 = get(nt2, k, NotPresent())
+        k => recursive_merge(v1, v2)
+    end
+    (;gen...)
+end
+recursive_merge(nt1::NamedTuple, nt2::NamedTuple, nts...) = recursive_merge(recursive_merge(nt1, nt2), nts...)
+
+
 function init_is_array_field(::Type{T}, i) where T
     @assert(fieldtype(T, i) <: Ptr)
     return i > 1 && fieldtype(T, i-1) <: Integer && endswith(string(fieldname(T, i-1)), "Count")
 end
 
-function init_convert(::Type{T}, v) where T
+function init_convert(::Type{T}, v, objs) where T
     try
         return convert(T, v)
     catch
     end
     if T <: Ptr
-        if isa(v, Ref)
-            return pointer_from_objref(v)
-        elseif isa(v, String)
-            return pointer(v)
+        if eltype(T) == WGPUVertexBufferLayout && isa(v, Vector{DataType})
+            bufferLayouts = WGPUVertexBufferLayout[]
+            push!(objs, bufferLayouts)
+            for vertType in v
+                vertexAttrs = WGPUVertexAttribute[]
+                push!(bufferLayouts, GetVertexLayout(vertType, vertexAttrs))
+                push!(objs, vertexAttrs)
+            end
+            pointer(bufferLayouts)
+        elseif isa(v, Ref)
+            pointer_from_objref(v)
+        elseif isa(v, String) || isa(v, Array)
+            pointer(v)
         end
     end
 end
@@ -72,7 +100,7 @@ function init_val(::Type{T}, objs::Array{Any}; vals...)::T where T
             fieldVal = nothing
             if haskey(vals, f) 
                 val = vals[f]
-                fieldVal = init_convert(type, val)
+                fieldVal = init_convert(type, val, objs)
                 if isnothing(fieldVal)
                     if type <: Ptr
                         if init_is_array_field(T, i)
@@ -92,6 +120,9 @@ function init_val(::Type{T}, objs::Array{Any}; vals...)::T where T
                         fieldVal = init_val(type, objs; val...)
                     end
                 else
+                    if type <: Ptr && init_is_array_field(T, i)
+                        params[i-1] = length(val)
+                    end
                     if !isimmutable(val)
                         push!(objs, val)
                     end
