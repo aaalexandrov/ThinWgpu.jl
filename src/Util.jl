@@ -11,12 +11,21 @@ function ptr_to_field(p::Ptr{T}, name::Symbol) where T
     fieldOffs = fieldoffset(T, fieldIndex)
     convert(Ptr{fieldType}, p + fieldOffs)
 end
-ptr_to_field(ref::Ref{T}, name::Symbol) where T = ptr_to_field(ptr_from_ref(ref), name)
+ptr_to_field(p::Ptr{T}, index::Int64) where T = p + (index-1)*sizeof(T)
+function ptr_to_field(p::Ptr{T}, indices::Union{Int64, Symbol}...) where T
+    ptr = p
+    for index in indices
+        if eltype(ptr) <: Ptr
+            ptr = unsafe_load(ptr)
+        end
+        ptr = ptr_to_field(ptr, index)
+    end
+    ptr
+end
+ptr_to_field(ref::Ref{T}, indices::Union{Int64, Symbol}...) where T = ptr_to_field(ptr_from_ref(ref), indices...)
 
-get_ptr_field(p::Ptr{T}, name::Symbol) where T = unsafe_load(ptr_to_field(p, name))
-get_ptr_field(p::Ref{T}, name::Symbol) where T = get_ptr_field(ptr_from_ref(p), name)
-set_ptr_field!(p::Ptr{T}, name::Symbol, val) where T = unsafe_store!(ptr_to_field(p, name), val)
-set_ptr_field!(p::Ref{T}, name::Symbol, val) where T = set_ptr_field!(ptr_from_ref(p), name, val)
+get_ptr_field(p::Ref{T}, indices::Union{Int64, Symbol}...) where T = unsafe_load(ptr_to_field(p, indices...))
+set_ptr_field!(value, p::Ref{T}, indices::Union{Int64, Symbol}...) where T = unsafe_store!(ptr_to_field(p, indices...), value)
 
 hash_by_value_count(v, field::Symbol) = 1
 function hash_by_value(v::T, h::UInt = zero(UInt), ptrLen::UInt = one(UInt))::UInt where T

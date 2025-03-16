@@ -96,27 +96,39 @@ function main()
     pipeline = Pipeline(device, shader;
         vertex = (buffers = [VertexPos],),
         primitive = (topology = WGPUPrimitiveTopology_TriangleList,),
-        multisample = (count = 1, mask = typemax(UInt32)),
+        multisample = (count = 1, mask = typemax(UInt32),),
         fragment = (targets = ((format = surface.format, writeMask = WGPUColorWriteMask_All,),),),
     )
 
     uniforms = Ref{Uniforms}()
-    set_ptr_field!(uniforms, :worldViewProj, tuple(reshape(Matrix{Float32}(I, 4, 4), 16)...))
+    set_ptr_field!(tuple(reshape(Matrix{Float32}(I, 4, 4), 16)...), uniforms, :worldViewProj)
     
-    uniformBuffer = CreateBuffer(device.device, device.queue, "uniforms", WGPUBufferUsageFlags(WGPUBufferUsage_Uniform), uniforms)
-    vertexBuffer = CreateBuffer(device.device, device.queue, "triVerts", WGPUBufferUsageFlags(WGPUBufferUsage_Vertex), triVertices)
+    uniformBuffer = Buffer(device, uniforms; label = "uniforms", usage = WGPUBufferUsage_Uniform)
+    vertexBuffer = Buffer(device, triVertices; label = "vertices", usage = WGPUBufferUsage_Vertex)
 
-    samplerLinearRepeat = CreateSampler(device.device, "linearRepeat", WGPUAddressMode_Repeat, WGPUFilterMode_Linear)
-    texture = CreateTexture(device.device, device.queue, "tex2D", WGPUTextureUsage_TextureBinding, [ntuple(i->UInt8((isodd(x+y) || i > 3) * 255), 4) for x=1:4, y=1:4])
-    textureView = wgpuTextureCreateView(texture, C_NULL)
+    samplerLinearRepeat = Sampler(device; 
+        label = "linearRepeat",
+        addressModeU = WGPUAddressMode_Repeat,
+        addressModeV = WGPUAddressMode_Repeat,
+        addressModeW = WGPUAddressMode_Repeat,
+        magFilter = WGPUFilterMode_Linear,
+        minFilter = WGPUFilterMode_Linear,
+        mipmapFilter = WGPUMipmapFilterMode_Linear,
+        lodMaxClamp = typemax(Float32),
+        maxAnisotropy = typemax(UInt16),
+    )
+
+    texture = Texture(device, [ntuple(i->UInt8((isodd(x+y) || i > 3) * 255), 4) for x=1:4, y=1:4];
+        label = "tex2D",
+    )
 
     bindGroup = CreateBindGroup(device.device; 
         label = "bindGroup",
         layout = shader.bindGroupLayouts[1],
         entries = (
-            (binding = 0, buffer = uniformBuffer, size = wgpuBufferGetSize(uniformBuffer)),
-            (binding = 1, sampler = samplerLinearRepeat),
-            (binding = 2, textureView = textureView),
+            (binding = 0, buffer = uniformBuffer.buffer, size = get_size(uniformBuffer),),
+            (binding = 1, sampler = samplerLinearRepeat.sampler),
+            (binding = 2, textureView = texture.view),
         ),
     )
 
@@ -134,7 +146,7 @@ function main()
             # updates
             rot = rotation_z(Float32((time() - startTime) % 2pi))
             Base.memmove(ptr_to_field(uniforms, :worldViewProj), pointer(rot), sizeof(rot))
-            wgpuQueueWriteBuffer(device.queue, uniformBuffer, 0, uniforms, sizeof(uniforms))
+            write(device, uniformBuffer, uniforms)
 
             label = "cmds"
             encoderDesc = Ref(WGPUCommandEncoderDescriptor(C_NULL, pointer(label)))
@@ -162,7 +174,7 @@ function main()
             #rendering goes here
             wgpuRenderPassEncoderSetPipeline(renderPass, pipeline.pipeline)
             wgpuRenderPassEncoderSetBindGroup(renderPass, 0, bindGroup, 0, C_NULL)
-            wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, vertexBuffer, 0, wgpuBufferGetSize(vertexBuffer))
+            wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, vertexBuffer.buffer, 0, get_size(vertexBuffer))
             wgpuRenderPassEncoderDraw(renderPass, 3, 1, 0, 0)
 
             wgpuRenderPassEncoderEnd(renderPass)
@@ -188,12 +200,11 @@ function main()
     @info "Frames: $frames, run time: $(round(runTime; digits = 3)), fps: $(round(frames / runTime; digits = 3))"
 
     wgpuBindGroupRelease(bindGroup)
-    wgpuTextureViewRelease(textureView)
-    wgpuTextureRelease(texture)
-    wgpuSamplerRelease(samplerLinearRepeat)
-    wgpuBufferRelease(uniformBuffer)
-    wgpuBufferRelease(vertexBuffer)
 
+    finalize(texture)
+    finalize(samplerLinearRepeat)
+    finalize(vertexBuffer)
+    finalize(uniformBuffer)
     finalize(pipeline)
     finalize(shader)
     finalize(surface)
