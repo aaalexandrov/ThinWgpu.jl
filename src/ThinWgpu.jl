@@ -7,9 +7,10 @@ using LinearAlgebra
 
 include("Util.jl") 
 include("Device.jl")
+include("Resources.jl")
 include("Surface.jl")
 include("Shader.jl")
-include("Resources.jl")
+include("Processing.jl")
 
 function rotation_z(angle::Float32)::Matrix{Float32}
     c = cos(angle)
@@ -135,14 +136,16 @@ function main()
     startTime = time()
     frames = 0
     while !GLFW.WindowShouldClose(window)
-        winSize = GLFW.GetWindowSize(window)
-        winSize = (winSize.width, winSize.height)
-        if winSize != surface.size
-            configure(surface, device, winSize, surface.presentMode)
-        end
+        acquireStatus = acquire_texture(surface)
+        if acquireStatus == AcquireTextureFailed
+            break
+        elseif acquireStatus == AcquireTextureReconfigure
+            winSize = GLFW.GetWindowSize(window)
+            configure(surface, device, (winSize.width, winSize.height), surface.presentMode)
+        else
+            @assert(has_acquired_texture(surface))
+            surfaceTex = get_acquired_texture(surface)
 
-        texView = CreateSurfaceCurrentTextureView(surface.surface)
-        if texView != C_NULL
             # updates
             rot = rotation_z(Float32((time() - startTime) % 2pi))
             Base.memmove(ptr_to_field(uniforms, :worldViewProj), pointer(rot), sizeof(rot))
@@ -154,7 +157,7 @@ function main()
 
             colorAttachments = [WGPURenderPassColorAttachment(
                 C_NULL,
-                texView,
+                surfaceTex.view,
                 C_NULL,
                 WGPULoadOp_Clear,
                 WGPUStoreOp_Store,
@@ -188,11 +191,11 @@ function main()
             wgpuQueueSubmit(device.queue, length(cmds), pointer(cmds, 1))
             wgpuCommandBufferRelease(cmdBuffer)
 
-            wgpuTextureViewRelease(texView)
-            wgpuSurfacePresent(surface.surface)
-            
+            present(surface)
+        
             frames += 1
         end
+
         wgpuDevicePoll(device.device, false, C_NULL)
         GLFW.PollEvents()
     end

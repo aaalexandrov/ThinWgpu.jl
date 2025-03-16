@@ -81,18 +81,26 @@ function CreateSurfaceCurrentTextureView(surface::WGPUSurface)
     wgpuTextureCreateView(surfTex[].texture, C_NULL)
 end
 
+@cenum SurfaceAcquireTextureResult::UInt32 begin 
+    AcquireTextureSuccess 
+    AcquireTextureReconfigure
+    AcquireTextureFailed
+end
+
 mutable struct Surface
     surface::WGPUSurface
     name::String
     format::WGPUTextureFormat
     presentMode::WGPUPresentMode
     size::NTuple{2, Int32}
+    currentTexture::Texture
     Surface(wgpuSurf::WGPUSurface, name::String) = finalizer(surface_finalize, new(
         wgpuSurf, 
         name, 
         WGPUTextureFormat_Undefined, 
         WGPUPresentMode_Fifo, 
-        (-1, -1)
+        (-1, -1),
+        Texture(; name = name)
     ))
 end
 
@@ -107,6 +115,7 @@ function surface_finalize(surface::Surface)
     end
 end
 
+is_configured(surface::Surface) = surface.size[1] >= 0
 function configure(surface::Surface, device::Device, size::NTuple{2, Int32}, presentMode::WGPUPresentMode)
     surface.size = size
     surface.presentMode = presentMode
@@ -128,4 +137,44 @@ function init(device::Device, surface::Surface)
 
     surface.format = wgpuSurfaceGetPreferredFormat(surface.surface, device.adapter)
     @info "Surface format $(surface.format)"
+end
+
+function acquire_texture(surface::Surface)::SurfaceAcquireTextureResult
+    curTex = surface.currentTexture
+    @assert(curTex.texture == C_NULL && curTex.view == C_NULL)
+    if !is_configured(surface)
+        return AcquireTextureReconfigure
+    end
+    surfTex = Ref(WGPUSurfaceTexture(
+        C_NULL,
+        0,
+        WGPUSurfaceGetCurrentTextureStatus_Force32
+    ))
+    wgpuSurfaceGetCurrentTexture(surface.surface, surfTex)
+    if surfTex[].status != WGPUSurfaceGetCurrentTextureStatus_Success
+        if surfTex[].status in (WGPUSurfaceGetCurrentTextureStatus_Outdated, WGPUSurfaceGetCurrentTextureStatus_Lost)
+            return AcquireTextureReconfigure
+        else
+            return AcquireTextureFailed
+        end
+    elseif surfTex[].suboptimal != 0
+        return AcquireTextureReconfigure
+    end
+
+    curTex.texture = surfTex[].texture
+    curTex.view = wgpuTextureCreateView(curTex.texture, C_NULL)
+
+    AcquireTextureSuccess
+end
+
+has_acquired_texture(surface::Surface) = surface.currentTexture.texture != C_NULL
+get_acquired_texture(surface::Surface) = surface.currentTexture
+
+function present(surface::Surface)
+    curTex = surface.currentTexture
+    @assert(curTex.texture != C_NULL && curTex.view != C_NULL)
+    wgpuTextureViewRelease(curTex.view)
+    curTex.texture = C_NULL
+    curTex.view = C_NULL
+    wgpuSurfacePresent(surface.surface)
 end

@@ -83,17 +83,18 @@ function sampler_finalize(sampler::Sampler)
     end
 end
 
-mutable struct Texture
-    texture::WGPUTexture
-    view::WGPUTextureView
-    name::String
-    function Texture(device::Device; textureDesc...)
-        name = textureDesc[:label]
-        texture = CreateTexture(device.device; textureDesc...)
-        # TODO - use a texture view desc to set the name
-        view = wgpuTextureCreateView(texture, C_NULL)
-        finalizer(texture_finalize, new(texture, view, name))
-    end
+@kwdef mutable struct Texture
+    texture::WGPUTexture = WGPUTexture(C_NULL)
+    view::WGPUTextureView = WGPUTextureView(C_NULL)
+    name::String = "texture"
+end
+
+function Texture(device::Device; textureDesc...)
+    name = textureDesc[:label]
+    texture = CreateTexture(device.device; textureDesc...)
+    # TODO - use a texture view desc to set the name
+    view = wgpuTextureCreateView(texture, C_NULL)
+    finalizer(texture_finalize, Texture(texture, view, name))
 end
 
 function Texture(device::Device, content; textureDesc...)
@@ -106,7 +107,7 @@ function Texture(device::Device, content; textureDesc...)
     dimension = get(textureDesc, :dimension, WGPUTextureDimension(WGPUTextureDimension_1D + ndims(content) - 1))
     texSize = get(textureDesc, :size, WGPUExtent3D(contentDim[1], contentDim[2], contentDim[3]))
     format = get(textureDesc, :format, TypeToTextureFormat(eltype(content)))
-    mipLevelCount = get(textureDesc, :mipLevelCount, UInt32(ceil(log2(maximum(size(content))))))
+    mipLevelCount = get(textureDesc, :mipLevelCount, UInt32(ceil(log2(maximum(size(content))))) + 1)
     sampleCount = get(textureDesc, :sampleCount, 1)
     mergedDesc = recursive_merge((;textureDesc...), (;
         label = name,
@@ -130,6 +131,17 @@ function texture_finalize(texture::Texture)
         texture.view = WGPUTextureView(C_NULL)
     end
 end
+
+get_usage(texture::Texture)::WGPUTextureUsageFlags = wgpuTextureGetUsage(texture.texture)
+get_format(texture::Texture)::WGPUTextureFormat = wgpuTextureGetFormat(texture.texture)
+get_dimension(texture::Texture)::WGPUTextureDimension = wgpuTextureGetDimension(texture.texture)
+get_size(texture::Texture)::NTuple{4, UInt32} = (
+    wgpuTextureGetWidth(texture.texture), 
+    wgpuTextureGetHeight(texture.texture), 
+    wgpuTextureGetDepthOrArrayLayers(texture.texture), 
+    wgpuTextureGetMipLevelCount(texture.texture)
+)
+get_sample_count(texture::Texture)::UInt32 = wgpuTextureGetSampleCount(texture.texture)
 
 function write(device::Device, texture::Texture, content, offset::NTuple{4, UInt32} = convert(NTuple{4, UInt32}, (0,0,0,0)), aspect::WGPUTextureAspect = WGPUTextureAspect_All)
     imgCopy = Ref(WGPUImageCopyTexture(
