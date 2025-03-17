@@ -18,6 +18,15 @@ function TypeToTextureFormat(::Type{T})::WGPUTextureFormat where T
     error("Unknown type for texture format")
 end
 
+function TypeToIndexFormat(::Type{T})::WGPUIndexFormat where T
+    if T == UInt16
+        return WGPUIndexFormat_Uint16
+    elseif T == UInt32
+        return WGPUIndexFormat_Uint32
+    end
+    error("Invalid index format type")
+end
+
 function CreateTexture(device::WGPUDevice; textureDesc...)::WGPUTexture
     texDesc = ComplexStruct(WGPUTextureDescriptor; textureDesc...)
     GC.@preserve texDesc wgpuDeviceCreateTexture(device, texDesc.obj)
@@ -87,6 +96,7 @@ end
     texture::WGPUTexture = WGPUTexture(C_NULL)
     view::WGPUTextureView = WGPUTextureView(C_NULL)
     name::String = "texture"
+    Texture(texture, view, name) = finalizer(texture_finalize, new(texture, view, name))
 end
 
 function Texture(device::Device; textureDesc...)
@@ -94,7 +104,7 @@ function Texture(device::Device; textureDesc...)
     texture = CreateTexture(device.device; textureDesc...)
     # TODO - use a texture view desc to set the name
     view = wgpuTextureCreateView(texture, C_NULL)
-    finalizer(texture_finalize, Texture(texture, view, name))
+    Texture(texture, view, name)
 end
 
 function Texture(device::Device, content; textureDesc...)

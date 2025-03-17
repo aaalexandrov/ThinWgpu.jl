@@ -79,6 +79,7 @@ function main()
     device = Device()
     surface = Surface(device, window, windowName)
     init(device, surface)
+    #surface.presentMode = WGPUPresentMode_Immediate
 
     shaderStages = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment
     shader = Shader(device, shaderName, shaderSrc, shaderStages, 
@@ -133,11 +134,14 @@ function main()
         ),
     )
 
+    commands = Commands()
+    renderPass = RenderPass()
     startTime = time()
     frames = 0
     while !GLFW.WindowShouldClose(window)
         acquireStatus = acquire_texture(surface)
         if acquireStatus == AcquireTextureFailed
+            @info acquireStatus
             break
         elseif acquireStatus == AcquireTextureReconfigure
             winSize = GLFW.GetWindowSize(window)
@@ -151,46 +155,29 @@ function main()
             Base.memmove(ptr_to_field(uniforms, :worldViewProj), pointer(rot), sizeof(rot))
             write(device, uniformBuffer, uniforms)
 
-            label = "cmds"
-            encoderDesc = Ref(WGPUCommandEncoderDescriptor(C_NULL, pointer(label)))
-            encoder = GC.@preserve label wgpuDeviceCreateCommandEncoder(device.device, encoderDesc)
+            open(device, commands)
 
-            colorAttachments = [WGPURenderPassColorAttachment(
-                C_NULL,
-                surfaceTex.view,
-                C_NULL,
-                WGPULoadOp_Clear,
-                WGPUStoreOp_Store,
-                WGPUColor(0.3, 0.3, 0.3, 1)
-            )] 
-            renderPassDesc = Ref(WGPURenderPassDescriptor(
-                C_NULL,
-                pointer(label),
-                length(colorAttachments),
-                pointer(colorAttachments, 1),
-                C_NULL,
-                C_NULL,
-                C_NULL
-            ))
-            renderPass = GC.@preserve colorAttachments wgpuCommandEncoderBeginRenderPass(encoder, renderPassDesc)
+            begin_pass(renderPass, commands;
+                label = renderPass.name,
+                colorAttachments = ((
+                    view = surfaceTex.view, 
+                    loadOp = WGPULoadOp_Clear, 
+                    storeOp = WGPUStoreOp_Store, 
+                    clearValue = WGPUColor(0.3, 0.3, 0.3, 1)
+                ),),
+            )
 
             #rendering goes here
-            wgpuRenderPassEncoderSetPipeline(renderPass, pipeline.pipeline)
-            wgpuRenderPassEncoderSetBindGroup(renderPass, 0, bindGroup, 0, C_NULL)
-            wgpuRenderPassEncoderSetVertexBuffer(renderPass, 0, vertexBuffer.buffer, 0, get_size(vertexBuffer))
-            wgpuRenderPassEncoderDraw(renderPass, 3, 1, 0, 0)
+            set_pipeline(renderPass, pipeline)
+            set_bind_group(renderPass, 0, bindGroup)
+            set_vertex_buffer(renderPass, 0, vertexBuffer)
+            draw(renderPass, 3)
 
-            wgpuRenderPassEncoderEnd(renderPass)
-            wgpuRenderPassEncoderRelease(renderPass)
+            end_pass(renderPass)
 
-            cmdBufferDesc = Ref(WGPUCommandBufferDescriptor(C_NULL, pointer(label)))
-            cmdBuffer = GC.@preserve label wgpuCommandEncoderFinish(encoder, cmdBufferDesc)
-            wgpuCommandEncoderRelease(encoder)
+            close(commands)
 
-            cmds = [cmdBuffer]
-            wgpuQueueSubmit(device.queue, length(cmds), pointer(cmds, 1))
-            wgpuCommandBufferRelease(cmdBuffer)
-
+            submit(device, (commands,))
             present(surface)
         
             frames += 1
@@ -204,6 +191,8 @@ function main()
 
     wgpuBindGroupRelease(bindGroup)
 
+    finalize(renderPass)
+    finalize(commands)
     finalize(texture)
     finalize(samplerLinearRepeat)
     finalize(vertexBuffer)
@@ -216,7 +205,7 @@ function main()
     GLFW.DestroyWindow(window)
 end
 
-try
+@time try
     GLFW.Init()
     main()
 finally

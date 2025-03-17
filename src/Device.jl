@@ -111,4 +111,3 @@ function device_finalize(device::Device)
     end
     wgpuSetLogCallback(C_NULL, C_NULL)
 end
-
