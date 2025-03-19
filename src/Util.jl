@@ -90,7 +90,7 @@ function init_convert(::Type{T}, v, objs) where T
             pointer(bufferLayouts)
         elseif isa(v, Ref)
             pointer_from_objref(v)
-        elseif isa(v, String) || isa(v, Array)
+        elseif isa(v, String) || isa(v, Array) && eltype(v) == eltype(T)
             pointer(v)
         end
     end

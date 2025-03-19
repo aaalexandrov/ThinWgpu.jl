@@ -81,13 +81,14 @@ mutable struct Device
     adapter::WGPUAdapter
     device::WGPUDevice
     queue::WGPUQueue
+    submitCommandBuffers::Vector{WGPUCommandBuffer}
     function Device(logLevel::WGPULogLevel = WGPULogLevel_Warn)
         # the @cfunction value needs to stay local because otherwise the Julia debugger breaks
         CLogCallback = @cfunction(LogCallback, Cvoid, (WGPULogLevel, Ptr{Cchar}))
         wgpuSetLogCallback(CLogCallback, C_NULL)
         wgpuSetLogLevel(logLevel)
 
-        dev = new(wgpuCreateInstance(Ref(WGPUInstanceDescriptor(C_NULL))), C_NULL, C_NULL, C_NULL)
+        dev = new(wgpuCreateInstance(Ref(WGPUInstanceDescriptor(C_NULL))), C_NULL, C_NULL, C_NULL, WGPUCommandBuffer[])
         finalizer(device_finalize, dev)
     end
 end

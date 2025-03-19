@@ -4,7 +4,16 @@ abstract type PassBase end
     encoder::WGPUCommandEncoder = WGPUCommandEncoder(C_NULL)
     commandBuffer::WGPUCommandBuffer = WGPUCommandBuffer(C_NULL)
     name::String = "Commands"
-    Commands(encoder, cmdBuffer, name) = finalizer(commands_finalize, new(encoder, cmdBuffer, name))
+    encoderDesc::Ref{WGPUCommandEncoderDescriptor} = Ref(WGPUCommandEncoderDescriptor(C_NULL, C_NULL))
+    function Commands(encoder, cmdBuffer, name, encoderDesc) 
+        set_ptr_field!(pointer(name), encoderDesc, :label)
+        finalizer(commands_finalize, new(
+            encoder, 
+            cmdBuffer, 
+            name, 
+            encoderDesc
+        ))
+    end
 end
 
 function commands_finalize(commands::Commands)
@@ -23,8 +32,7 @@ is_closed(commands::Commands) = commands.commandBuffer != C_NULL
 is_empty(commands::Commands) = !is_open(commands) && !is_closed(commands)
 function open(device::Device, commands::Commands)
     @assert(is_empty(commands))
-    encoderDesc = Ref(WGPUCommandEncoderDescriptor(C_NULL, pointer(commands.name)))
-    commands.encoder = wgpuDeviceCreateCommandEncoder(device.device, encoderDesc)
+    commands.encoder = wgpuDeviceCreateCommandEncoder(device.device, commands.encoderDesc)
 end
 
 function close(commands::Commands)
@@ -47,14 +55,15 @@ function on_submitted(commands::Commands)
 end
 
 function submit(device::Device, commandsArray)
-    cmdBuffers = WGPUCommandBuffer[]
+    @assert(length(device.submitCommandBuffers) == 0)
     for commands in commandsArray
         if is_open(commands)
             close(commands)
         end
-        push!(cmdBuffers, commands.commandBuffer)
+        push!(device.submitCommandBuffers, commands.commandBuffer)
     end
-    wgpuQueueSubmit(device.queue, length(cmdBuffers), pointer(cmdBuffers, 1))
+    wgpuQueueSubmit(device.queue, length(device.submitCommandBuffers), pointer(device.submitCommandBuffers, 1))
+    resize!(device.submitCommandBuffers, 0)
     foreach(on_submitted, commandsArray)
 end
 
@@ -71,13 +80,12 @@ function render_pass_finalize(renderPass::RenderPass)
     end
 end
 
-function begin_pass(renderPass::RenderPass, commands::Commands; renderPassDesc...)
+function begin_pass(renderPass::RenderPass, commands::Commands, passDesc::ComplexStruct{WGPURenderPassDescriptor})
     @assert(renderPass.encoder == C_NULL)
     @assert(is_open(commands))
-
-    passDesc = ComplexStruct(WGPURenderPassDescriptor; renderPassDesc...)
-    renderPass.encoder = wgpuCommandEncoderBeginRenderPass(commands.encoder, passDesc.obj)
+    renderPass.encoder = GC.@preserve passDesc wgpuCommandEncoderBeginRenderPass(commands.encoder, passDesc.obj)
 end
+begin_pass(renderPass::RenderPass, commands::Commands; renderPassDesc...) = begin_pass(renderPass, commands, ComplexStruct(WGPURenderPassDescriptor; renderPassDesc...))
 
 set_pipeline(renderPass::RenderPass, pipeline::Pipeline) = wgpuRenderPassEncoderSetPipeline(renderPass.encoder, pipeline.pipeline)
 function set_bind_group(renderPass::RenderPass, groupIndex::Integer, group::WGPUBindGroup, dynamicOffsets = ()) 
@@ -118,13 +126,12 @@ function compute_pass_finalize(computePass::ComputePass)
     end
 end
 
-function begin_pass(computePass::ComputePass, commands::Commands; computePassDesc...)
+function begin_pass(computePass::ComputePass, commands::Commands, passDesc::ComplexStruct{WGPUComputePassDescriptor})
     @assert(computePass.encoder == C_NULL)
     @assert(is_open(commands))
-
-    passDesc = ComplexStruct(WGPUComputePassDescriptor; computePassDesc...)
-    computePass.encoder = wgpuCommandEncoderBeginComputePass(commands.encoder, passDesc.obj)
+    computePass.encoder = GC.@preserve passDesc wgpuCommandEncoderBeginComputePass(commands.encoder, passDesc.obj)
 end
+begin_pass(computePass::ComputePass, commands::Commands; computePassDesc...) = begin_pass(computePass, commands, ComplexStruct(WGPUComputePassDescriptor; computePassDesc...))
 
 set_pipeline(computePass::ComputePass, pipeline::Pipeline) = wgpuComputePassEncoderSetPipeline(computePass.encoder, pipeline.pipeline)
 function set_bind_group(computePass::ComputePass, groupIndex::Integer, group::WGPUBindGroup, dynamicOffsets = ()) 

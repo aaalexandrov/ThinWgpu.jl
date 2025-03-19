@@ -94,13 +94,15 @@ mutable struct Surface
     presentMode::WGPUPresentMode
     size::NTuple{2, Int32}
     currentTexture::Texture
+    currentSurface::Ref{WGPUSurfaceTexture}
     Surface(wgpuSurf::WGPUSurface, name::String) = finalizer(surface_finalize, new(
         wgpuSurf, 
         name, 
         WGPUTextureFormat_Undefined, 
         WGPUPresentMode_Fifo, 
         (-1, -1),
-        Texture(; name = name)
+        Texture(; name = name),
+        Ref(WGPUSurfaceTexture(C_NULL, 0, WGPUSurfaceGetCurrentTextureStatus_Force32))
     ))
 end
 
@@ -145,23 +147,18 @@ function acquire_texture(surface::Surface)::SurfaceAcquireTextureResult
     if !is_configured(surface)
         return AcquireTextureReconfigure
     end
-    surfTex = Ref(WGPUSurfaceTexture(
-        C_NULL,
-        0,
-        WGPUSurfaceGetCurrentTextureStatus_Force32
-    ))
-    wgpuSurfaceGetCurrentTexture(surface.surface, surfTex)
-    if surfTex[].status != WGPUSurfaceGetCurrentTextureStatus_Success
-        if surfTex[].status in (WGPUSurfaceGetCurrentTextureStatus_Outdated, WGPUSurfaceGetCurrentTextureStatus_Lost)
+    wgpuSurfaceGetCurrentTexture(surface.surface, surface.currentSurface)
+    if surface.currentSurface[].status != WGPUSurfaceGetCurrentTextureStatus_Success
+        if surface.currentSurface[].status in (WGPUSurfaceGetCurrentTextureStatus_Outdated, WGPUSurfaceGetCurrentTextureStatus_Lost)
             return AcquireTextureReconfigure
         else
             return AcquireTextureFailed
         end
-    elseif surfTex[].suboptimal != 0
+    elseif surface.currentSurface[].suboptimal != 0
         return AcquireTextureReconfigure
     end
 
-    curTex.texture = surfTex[].texture
+    curTex.texture = surface.currentSurface[].texture
     curTex.view = wgpuTextureCreateView(curTex.texture, C_NULL)
 
     AcquireTextureSuccess

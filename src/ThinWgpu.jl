@@ -11,15 +11,7 @@ include("Resources.jl")
 include("Surface.jl")
 include("Shader.jl")
 include("Processing.jl")
-
-function rotation_z(angle::Float32)::Matrix{Float32}
-    c = cos(angle)
-    s = sin(angle)
-    Float32[ c s 0 0
-            -s c 0 0
-             0 0 1 0
-             0 0 0 1 ]
-end
+include("MathUtil.jl")
 
 const shaderName = "#tri.wgsl"
 const shaderSrc = 
@@ -79,7 +71,7 @@ function main()
     device = Device()
     surface = Surface(device, window, windowName)
     init(device, surface)
-    #surface.presentMode = WGPUPresentMode_Immediate
+    surface.presentMode = WGPUPresentMode_Immediate
 
     shaderStages = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment
     shader = Shader(device, shaderName, shaderSrc, shaderStages, 
@@ -102,8 +94,7 @@ function main()
         fragment = (targets = ((format = surface.format, writeMask = WGPUColorWriteMask_All,),),),
     )
 
-    uniforms = Ref{Uniforms}()
-    set_ptr_field!(tuple(reshape(Matrix{Float32}(I, 4, 4), 16)...), uniforms, :worldViewProj)
+    uniforms = Ref(Uniforms(ntuple(i->zero(Float32), 16)))
     
     uniformBuffer = Buffer(device, uniforms; label = "uniforms", usage = WGPUBufferUsage_Uniform)
     vertexBuffer = Buffer(device, triVertices; label = "vertices", usage = WGPUBufferUsage_Vertex)
@@ -136,6 +127,16 @@ function main()
 
     commands = Commands()
     renderPass = RenderPass()
+    renderPassDesc = ComplexStruct(WGPURenderPassDescriptor; 
+        label = renderPass.name,
+        colorAttachments = ((
+            view = C_NULL, 
+            loadOp = WGPULoadOp_Clear, 
+            storeOp = WGPUStoreOp_Store, 
+            clearValue = WGPUColor(0.3, 0.3, 0.3, 1)
+        ),),
+    )
+    xform = Ref(mat4f(I))
     startTime = time()
     frames = 0
     while !GLFW.WindowShouldClose(window)
@@ -151,21 +152,15 @@ function main()
             surfaceTex = get_acquired_texture(surface)
 
             # updates
-            rot = rotation_z(Float32((time() - startTime) % 2pi))
-            Base.memmove(ptr_to_field(uniforms, :worldViewProj), pointer(rot), sizeof(rot))
+            wtoh = Float32(surface.size[1])/surface.size[2]
+            xform[] = ortho(-1f0*wtoh, 1f0*wtoh, 1f0, -1f0, 0f0, 1f0) * xform_compose(SA_F32[0, 0, 0.5], rot(Float32((time() - startTime) % 2pi), SA_F32[0, 0, -1]), 1.0f0)
+            GC.@preserve xform Base.memmove(ptr_to_field(uniforms, :worldViewProj), ptr_from_ref(xform), sizeof(xform))
             write(device, uniformBuffer, uniforms)
 
             open(device, commands)
 
-            begin_pass(renderPass, commands;
-                label = renderPass.name,
-                colorAttachments = ((
-                    view = surfaceTex.view, 
-                    loadOp = WGPULoadOp_Clear, 
-                    storeOp = WGPUStoreOp_Store, 
-                    clearValue = WGPUColor(0.3, 0.3, 0.3, 1)
-                ),),
-            )
+            set_ptr_field!(surfaceTex.view, renderPassDesc.obj, :colorAttachments, 1, :view)
+            begin_pass(renderPass, commands, renderPassDesc)
 
             #rendering goes here
             set_pipeline(renderPass, pipeline)
@@ -203,14 +198,19 @@ function main()
     finalize(device)
 
     GLFW.DestroyWindow(window)
+    nothing
 end
 
-@time try
-    GLFW.Init()
-    main()
-finally
-    # so that windows close in case of an runtime error
-    GLFW.Terminate()
+function run()
+    try
+        GLFW.Init()
+        main()
+    finally
+        # so that windows close in case of an runtime error
+        GLFW.Terminate()
+    end
 end
+
+@time run()
 
 end
