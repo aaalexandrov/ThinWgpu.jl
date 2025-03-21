@@ -11,6 +11,7 @@ include("Resources.jl")
 include("Surface.jl")
 include("Shader.jl")
 include("Processing.jl")
+include("Downsample.jl")
 include("MathUtil.jl")
 
 const shaderName = "#tri.wgsl"
@@ -47,7 +48,7 @@ const shaderSrc =
     """
 
 struct Uniforms
-    worldViewProj::NTuple{16, Float32}
+    worldViewProj::SArray{Tuple{4, 4}, Float32, 2, 16}
 end
 
 struct VertexPos
@@ -111,8 +112,9 @@ function main()
         maxAnisotropy = typemax(UInt16),
     )
 
-    texture = Texture(device, [ntuple(i->UInt8((isodd(x+y) || i > 3) * 255), 4) for x=1:4, y=1:4];
+    texture = Texture(device, [ntuple(i->UInt8((isodd(floor(x/64)+floor(y/64)) || i > 3) * 255), 4) for x=1:1024, y=1:1024];
         label = "tex2D",
+        usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_StorageBinding | WGPUTextureUsage_CopyDst,
     )
 
     bindGroup = CreateBindGroup(device.device; 
@@ -136,7 +138,15 @@ function main()
             clearValue = WGPUColor(0.3, 0.3, 0.3, 1)
         ),),
     )
-    xform = Ref(mat4f(I))
+
+    open(device, commands)
+    computePass = ComputePass()
+    begin_pass(computePass, commands; label = "Downsample")
+    downsample_texture(device, computePass, texture)
+    end_pass(computePass)
+    close(commands)
+    submit(device, (commands,))
+
     startTime = time()
     frames = 0
     while !GLFW.WindowShouldClose(window)
@@ -153,8 +163,8 @@ function main()
 
             # updates
             wtoh = Float32(surface.size[1])/surface.size[2]
-            xform[] = ortho(-1f0*wtoh, 1f0*wtoh, 1f0, -1f0, 0f0, 1f0) * xform_compose(SA_F32[0, 0, 0.5], rot(Float32((time() - startTime) % 2pi), SA_F32[0, 0, -1]), 1.0f0)
-            GC.@preserve xform Base.memmove(ptr_to_field(uniforms, :worldViewProj), ptr_from_ref(xform), sizeof(xform))
+            xform = ortho(-1f0*wtoh, 1f0*wtoh, 1f0, -1f0, 0f0, 1f0) * xform_compose(SA_F32[0, 0, 0.5], rot(Float32((time() - startTime) % 2pi), SA_F32[0, 0, -1]), 1.0f0)
+            set_ptr_field!(xform, uniforms, :worldViewProj)
             write(device, uniformBuffer, uniforms)
 
             open(device, commands)
@@ -186,6 +196,7 @@ function main()
 
     wgpuBindGroupRelease(bindGroup)
 
+    downsample_finalize()
     finalize(renderPass)
     finalize(commands)
     finalize(texture)

@@ -70,11 +70,14 @@ end
 @kwdef mutable struct RenderPass <: PassBase
     encoder::WGPURenderPassEncoder = WGPURenderPassEncoder(C_NULL)
     name::String = "RenderPass"
-    RenderPass(encoder, name) = finalizer(render_pass_finalize, new(encoder, name))
+    bindGroups::Vector{WGPUBindGroup} = WGPUBindGroup[]
+    RenderPass(encoder, name, bindGroups) = finalizer(render_pass_finalize, new(encoder, name, bindGroups))
 end
 
 function render_pass_finalize(renderPass::RenderPass)
     if renderPass.encoder != C_NULL
+        foreach(wgpuBindGroupRelease, renderPass.bindGroups)
+        empty!(renderPass.bindGroups)
         wgpuRenderPassEncoderRelease(renderPass.encoder)
         renderPass.encoder = WGPURenderPassEncoder(C_NULL)
     end
@@ -88,7 +91,10 @@ end
 begin_pass(renderPass::RenderPass, commands::Commands; renderPassDesc...) = begin_pass(renderPass, commands, ComplexStruct(WGPURenderPassDescriptor; renderPassDesc...))
 
 set_pipeline(renderPass::RenderPass, pipeline::Pipeline) = wgpuRenderPassEncoderSetPipeline(renderPass.encoder, pipeline.pipeline)
-function set_bind_group(renderPass::RenderPass, groupIndex::Integer, group::WGPUBindGroup, dynamicOffsets = ()) 
+function set_bind_group(renderPass::RenderPass, groupIndex::Integer, group::WGPUBindGroup, dynamicOffsets = (), addRef::Bool = false) 
+    if addRef
+        push!(renderPass.bindGroups, group)
+    end
     wgpuRenderPassEncoderSetBindGroup(renderPass.encoder, groupIndex, group, length(dynamicOffsets), length(dynamicOffsets) > 0 ? pointer(dynamicOffsets, 1) : C_NULL)
 end
 function set_vertex_buffer(renderPass::RenderPass, slot::Integer, buffer::Buffer, offset::Integer = 0, size::Integer = 0)
@@ -116,11 +122,14 @@ end
 @kwdef mutable struct ComputePass <: PassBase
     encoder::WGPUComputePassEncoder = WGPUComputePassEncoder(C_NULL)
     name::String = "ComputePass"
-    ComputePass(encoder, name) = finalizer(compute_pass_finalize, new(encoder, name))
+    bindGroups::Vector{WGPUBindGroup} = WGPUBindGroup[]
+    ComputePass(encoder, name, bindGroups) = finalizer(compute_pass_finalize, new(encoder, name, bindGroups))
 end
 
 function compute_pass_finalize(computePass::ComputePass)
     if computePass.encoder != C_NULL
+        foreach(wgpuBindGroupRelease, computePass.bindGroups)
+        empty!(computePass.bindGroups)
         wgpuComputePassEncoderRelease(computePass.encoder)
         computePass.encoder = WGPUComputePassEncoder(C_NULL)
     end
@@ -134,10 +143,13 @@ end
 begin_pass(computePass::ComputePass, commands::Commands; computePassDesc...) = begin_pass(computePass, commands, ComplexStruct(WGPUComputePassDescriptor; computePassDesc...))
 
 set_pipeline(computePass::ComputePass, pipeline::Pipeline) = wgpuComputePassEncoderSetPipeline(computePass.encoder, pipeline.pipeline)
-function set_bind_group(computePass::ComputePass, groupIndex::Integer, group::WGPUBindGroup, dynamicOffsets = ()) 
+function set_bind_group(computePass::ComputePass, groupIndex::Integer, group::WGPUBindGroup, dynamicOffsets = (), addRef::Bool = false) 
+    if addRef
+        push!(computePass.bindGroups, group)
+    end
     wgpuComputePassEncoderSetBindGroup(computePass.encoder, groupIndex, group, length(dynamicOffsets), length(dynamicOffsets) > 0 ? pointer(dynamicOffsets, 1) : C_NULL)
 end
-function dispatch(computePass::ComputePass, workgroupCountX::Integer = 1, workGroupCountY::Integer = 1, workgroupCountZ::Integer = 1)
+function dispatch(computePass::ComputePass, workgroupCountX::Integer = 1, workgroupCountY::Integer = 1, workgroupCountZ::Integer = 1)
     wgpuComputePassEncoderDispatchWorkgroups(computePass.encoder, workgroupCountX, workgroupCountY, workgroupCountZ)
 end
 
