@@ -98,6 +98,14 @@ function downsample_texture(device::Device, computePass::ComputePass, texture::T
     wgpuTextureViewRelease(viewSrc)
 end
 
+function downsample_texture(device::Device, commands::Commands, texture::Texture)
+    computePass = ComputePass()
+    begin_pass(computePass, commands; label = "Downsample" * texture.name)
+    downsample_texture(device, computePass, texture)
+    end_pass(computePass)
+    finalize(computePass)
+end
+
 function downsample_finalize()
     for (k, p) in downsamplePipelines
         finalize(p.shader)

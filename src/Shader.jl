@@ -24,7 +24,7 @@ end
 
 function GetVertexFormat(::Type{T}, unorm::Bool = false)::WGPUVertexFormat where T
     local baseType
-    dim = fieldcount(T)
+    dim = length(T)
     elemType = eltype(T)
     if elemType == Float32
         baseType = "Float32"

@@ -70,7 +70,7 @@ end
 @kwdef mutable struct RenderPass <: PassBase
     encoder::WGPURenderPassEncoder = WGPURenderPassEncoder(C_NULL)
     name::String = "RenderPass"
-    bindGroups::Vector{WGPUBindGroup} = WGPUBindGroup[]
+    bindGroups::Set{WGPUBindGroup} = Set{WGPUBindGroup}()
     RenderPass(encoder, name, bindGroups) = finalizer(render_pass_finalize, new(encoder, name, bindGroups))
 end
 
@@ -122,7 +122,7 @@ end
 @kwdef mutable struct ComputePass <: PassBase
     encoder::WGPUComputePassEncoder = WGPUComputePassEncoder(C_NULL)
     name::String = "ComputePass"
-    bindGroups::Vector{WGPUBindGroup} = WGPUBindGroup[]
+    bindGroups::Set{WGPUBindGroup} = Set{WGPUBindGroup}()
     ComputePass(encoder, name, bindGroups) = finalizer(compute_pass_finalize, new(encoder, name, bindGroups))
 end
 

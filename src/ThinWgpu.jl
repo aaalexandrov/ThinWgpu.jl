@@ -25,6 +25,12 @@ const shaderSrc =
     @group(0) @binding(1) var texSampler: sampler;
     @group(0) @binding(2) var tex0: texture_2d<f32>;
    
+    struct VSIn {
+        @location(0) pos: vec3f, 
+        @location(1) color: vec3f, 
+        @location(2) uv: vec2f,
+    };
+
     struct VSOut {
         @builtin(position) pos: vec4f,
         @location(0) color: vec4f,
@@ -32,11 +38,11 @@ const shaderSrc =
     };
 
     @vertex
-    fn vs_main(@location(0) pos: vec3f, @location(1) color: vec3f, @location(2) uv: vec2f) -> VSOut {
+    fn vs_main(vsIn: VSIn) -> VSOut {
         var vsOut: VSOut;
-        vsOut.pos = uni.worldViewProj * vec4f(pos, 1.0);
-        vsOut.color = vec4f(color, 1.0);
-        vsOut.uv = uv;
+        vsOut.pos = uni.worldViewProj * vec4f(vsIn.pos, 1.0);
+        vsOut.color = vec4f(vsIn.color, 1.0);
+        vsOut.uv = vsIn.uv;
         return vsOut;
     }
 
@@ -52,15 +58,15 @@ struct Uniforms
 end
 
 struct VertexPos
-    pos::NTuple{3, Float32}
-    color::NTuple{3, Float32}
-    uv::NTuple{2, Float32}
+    pos::SVector{3, Float32}
+    color::SVector{3, Float32}
+    uv::SVector{2, Float32}
 end
 
 const triVertices = [
-    VertexPos((-0.5, -0.5, 0), (1, 0, 0), (0, 0)),
-    VertexPos(( 0.5, -0.5, 0), (0, 1, 0), (0, 1)),
-    VertexPos(( 0.0,  0.5, 0), (0, 0, 1), (1, 1)),
+    VertexPos(SA_F32[-0.5, -0.5, 0], SA_F32[1, 0, 0], SA_F32[0, 0]),
+    VertexPos(SA_F32[ 0.5, -0.5, 0], SA_F32[0, 1, 0], SA_F32[0, 1]),
+    VertexPos(SA_F32[ 0.0,  0.5, 0], SA_F32[0, 0, 1], SA_F32[1, 1]),
 ]
 
 function main()
@@ -75,18 +81,16 @@ function main()
     surface.presentMode = WGPUPresentMode_Immediate
 
     shaderStages = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment
-    shader = Shader(device, shaderName, shaderSrc, shaderStages, 
-        (
-            (;
-                label=shaderName,
-                entries=(
-                    (binding=0, visibility=shaderStages, buffer=(type=WGPUBufferBindingType_Uniform,)),
-                    (binding=1, visibility=shaderStages, sampler=(type=WGPUSamplerBindingType_Filtering,)),
-                    (binding=2, visibility=shaderStages, texture=(sampleType=WGPUTextureSampleType_Float, viewDimension=WGPUTextureViewDimension_2D,)),
-                ),
+    shader = Shader(device, shaderName, shaderSrc, shaderStages, (
+        (;
+            label=shaderName,
+            entries=(
+                (binding=0, visibility=shaderStages, buffer=(type=WGPUBufferBindingType_Uniform,)),
+                (binding=1, visibility=shaderStages, sampler=(type=WGPUSamplerBindingType_Filtering,)),
+                (binding=2, visibility=shaderStages, texture=(sampleType=WGPUTextureSampleType_Float, viewDimension=WGPUTextureViewDimension_2D,)),
             ),
         ),
-    )
+    ),)
 
     pipeline = Pipeline(device, shader;
         vertex = (buffers = [VertexPos],),
@@ -140,10 +144,7 @@ function main()
     )
 
     open(device, commands)
-    computePass = ComputePass()
-    begin_pass(computePass, commands; label = "Downsample")
-    downsample_texture(device, computePass, texture)
-    end_pass(computePass)
+    downsample_texture(device, commands, texture)
     close(commands)
     submit(device, (commands,))
 
