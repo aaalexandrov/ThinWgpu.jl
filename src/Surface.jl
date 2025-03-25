@@ -6,9 +6,6 @@ if Sys.iswindows()
     function GetModuleHandle(ptr)
         ccall((:GetModuleHandleA, "kernel32"), stdcall, Ptr{UInt32}, (UInt32,), ptr)
     end
-
-    function GetOSSurfaceDescriptor(window::GLFW.Window)
-    end
 elseif Sys.islinux()
     function GetX11Display()
         ccall((:glfwGetX11Display, GLFW.libglfw), Ptr{Nothing}, ())

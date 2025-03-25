@@ -12,6 +12,7 @@ include("Surface.jl")
 include("Shader.jl")
 include("Processing.jl")
 include("Downsample.jl")
+include("FixedFont.jl")
 include("MathUtil.jl")
 
 const shaderName = "#tri.wgsl"
@@ -116,6 +117,8 @@ function main()
         maxAnisotropy = typemax(UInt16),
     )
 
+    font = get_fixed_font_10x20(device)
+
     texture = Texture(device, [ntuple(i->UInt8((isodd(floor(x/64)+floor(y/64)) || i > 3) * 255), 4) for x=1:1024, y=1:1024];
         label = "tex2D",
         usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_StorageBinding | WGPUTextureUsage_CopyDst,
@@ -201,6 +204,7 @@ function main()
     finalize(renderPass)
     finalize(commands)
     finalize(texture)
+    finalize(font)
     finalize(samplerLinearRepeat)
     finalize(vertexBuffer)
     finalize(uniformBuffer)

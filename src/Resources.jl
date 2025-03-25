@@ -117,7 +117,7 @@ function Texture(device::Device, content; textureDesc...)
     dimension = get(textureDesc, :dimension, WGPUTextureDimension(WGPUTextureDimension_1D + ndims(content) - 1))
     texSize = get(textureDesc, :size, WGPUExtent3D(contentDim[1], contentDim[2], contentDim[3]))
     format = get(textureDesc, :format, TypeToTextureFormat(eltype(content)))
-    mipLevelCount = get(textureDesc, :mipLevelCount, UInt32(ceil(log2(maximum(size(content))))) + 1)
+    mipLevelCount = get(textureDesc, :mipLevelCount, UInt32(floor(log2(maximum(size(content))))) + 1)
     sampleCount = get(textureDesc, :sampleCount, 1)
     mergedDesc = recursive_merge((;textureDesc...), (;
         label = name,
