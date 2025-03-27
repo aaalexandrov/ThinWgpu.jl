@@ -19,6 +19,8 @@ end
 
 function CreateBindGroup(device::WGPUDevice; bindGroupDesc...)
     bindGroupDesc = ComplexStruct(WGPUBindGroupDescriptor; bindGroupDesc...)
+    # CreateBindGroup seems to release the layout it's passed, so we bump the ref count to keep it usable in the future
+    wgpuBindGroupLayoutReference(bindGroupDesc.obj[].layout)
     GC.@preserve bindGroupDesc wgpuDeviceCreateBindGroup(device, bindGroupDesc.obj)
 end
 

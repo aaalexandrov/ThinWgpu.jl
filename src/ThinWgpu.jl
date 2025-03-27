@@ -12,7 +12,6 @@ include("Surface.jl")
 include("Shader.jl")
 include("Processing.jl")
 include("Downsample.jl")
-include("FixedFont.jl")
 include("MathUtil.jl")
 
 const shaderName = "#tri.wgsl"
@@ -55,20 +54,22 @@ const shaderSrc =
     """
 
 struct Uniforms
-    worldViewProj::SArray{Tuple{4, 4}, Float32, 2, 16}
+    worldViewProj::SMatrix{4, 4, Float32, 16}
 end
 
-struct VertexPos
+struct VertexPosColorUv
     pos::SVector{3, Float32}
     color::SVector{3, Float32}
     uv::SVector{2, Float32}
 end
 
 const triVertices = [
-    VertexPos(SA_F32[-0.5, -0.5, 0], SA_F32[1, 0, 0], SA_F32[0, 0]),
-    VertexPos(SA_F32[ 0.5, -0.5, 0], SA_F32[0, 1, 0], SA_F32[0, 1]),
-    VertexPos(SA_F32[ 0.0,  0.5, 0], SA_F32[0, 0, 1], SA_F32[1, 1]),
+    VertexPosColorUv(SA_F32[-0.5, -0.5, 0], SA_F32[1, 0, 0], SA_F32[0, 0]),
+    VertexPosColorUv(SA_F32[ 0.5, -0.5, 0], SA_F32[0, 1, 0], SA_F32[0, 1]),
+    VertexPosColorUv(SA_F32[ 0.0,  0.5, 0], SA_F32[0, 0, 1], SA_F32[1, 1]),
 ]
+
+include("FixedFont.jl")
 
 function main()
     windowName = "Main"
@@ -94,13 +95,13 @@ function main()
     ),)
 
     pipeline = Pipeline(device, shader;
-        vertex = (buffers = [VertexPos],),
+        vertex = (buffers = [VertexPosColorUv],),
         primitive = (topology = WGPUPrimitiveTopology_TriangleList,),
         multisample = (count = 1, mask = typemax(UInt32),),
         fragment = (targets = ((format = surface.format, writeMask = WGPUColorWriteMask_All,),),),
     )
 
-    uniforms = Ref(Uniforms(ntuple(i->zero(Float32), 16)))
+    uniforms = Ref(Uniforms(zero(fieldtype(Uniforms, :worldViewProj))))
     
     uniformBuffer = Buffer(device, uniforms; label = "uniforms", usage = WGPUBufferUsage_Uniform)
     vertexBuffer = Buffer(device, triVertices; label = "vertices", usage = WGPUBufferUsage_Vertex)
@@ -117,7 +118,8 @@ function main()
         maxAnisotropy = typemax(UInt16),
     )
 
-    font = get_fixed_font_10x20(device)
+    font = fixed_font_10x20(device)
+    fontModel = FontModel(device, font, pipeline, samplerLinearRepeat, (Int32(1), Int32(1)))
 
     texture = Texture(device, [ntuple(i->UInt8((isodd(floor(x/64)+floor(y/64)) || i > 3) * 255), 4) for x=1:1024, y=1:1024];
         label = "tex2D",
@@ -153,6 +155,7 @@ function main()
 
     startTime = time()
     frames = 0
+    frameTime = time_ns()
     while !GLFW.WindowShouldClose(window)
         acquireStatus = acquire_texture(surface)
         if acquireStatus == AcquireTextureFailed
@@ -161,7 +164,12 @@ function main()
         elseif acquireStatus == AcquireTextureReconfigure
             winSize = GLFW.GetWindowSize(window)
             configure(surface, device, (winSize.width, winSize.height), surface.presentMode)
+            set_resolution(fontModel, (winSize.width, winSize.height))
         else
+            frameDuration = frameTime
+            frameTime = time_ns()
+            frameDuration = frameTime - frameDuration
+
             @assert(has_acquired_texture(surface))
             surfaceTex = get_acquired_texture(surface)
 
@@ -170,6 +178,9 @@ function main()
             xform = ortho(-1f0*wtoh, 1f0*wtoh, 1f0, -1f0, 0f0, 1f0) * xform_compose(SA_F32[0, 0, 0.5], rot(Float32((time() - startTime) % 2pi), SA_F32[0, 0, -1]), 1.0f0)
             set_ptr_field!(xform, uniforms, :worldViewProj)
             write(device, uniformBuffer, uniforms)
+
+            add_text(fontModel, "$(round(1e9 / frameDuration; digits = 2)) fps", SVector{2, Int32}(20, 20), SVector{3, Float32}(1, 0, 1))
+            update(device, fontModel)
 
             open(device, commands)
 
@@ -181,6 +192,8 @@ function main()
             set_bind_group(renderPass, 0, bindGroup)
             set_vertex_buffer(renderPass, 0, vertexBuffer)
             draw(renderPass, 3)
+
+            render(fontModel, renderPass)
 
             end_pass(renderPass)
 
@@ -204,6 +217,7 @@ function main()
     finalize(renderPass)
     finalize(commands)
     finalize(texture)
+    finalize(fontModel)
     finalize(font)
     finalize(samplerLinearRepeat)
     finalize(vertexBuffer)

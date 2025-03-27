@@ -1,6 +1,7 @@
 using StaticArrays
 using LinearAlgebra
 
+const vec2f = SVector{2, Float32}
 const vec3f = SVector{3, Float32}
 const vec4f = SVector{4, Float32}
 const mat3f = SMatrix{3, 3, Float32}
@@ -68,9 +69,9 @@ end
 
 function ortho(left::T, right::T, top::T, bottom::T, near::T, far::T)::SMatrix{4, 4, T} where T
 	SMatrix{4, 4, T}(
-		2/(right-left), 0             , 0               , 0,
-		0             , 2/(top-bottom), 0               , 0,
-		0             , 0             , 1/(far-near)    , 0,
-		0             , 0             , -near*(far-near), 1
+		2/(right-left)            , 0                         , 0               , 0,
+		0                         , 2/(top-bottom)            , 0               , 0,
+		0                         , 0                         , 1/(far-near)    , 0,
+		-(right+left)/(right-left), -(top+bottom)/(top-bottom), -near*(far-near), 1
 	)
 end

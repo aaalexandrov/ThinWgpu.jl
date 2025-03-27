@@ -1,3 +1,129 @@
+mutable struct FixedFont
+    charSize::NTuple{2, UInt32}
+    texture::Texture
+    FixedFont(charSize, texture::Texture) = finalizer(fixed_font_finalize, new(convert(NTuple{2, UInt32}, charSize), texture))
+end
+
+fixed_font_finalize(font::FixedFont) = finalize(font.texture)
+
+function for_font_chars(fn, font::FixedFont, s::String)
+    charDims = get_size(font.texture)[1:2] ./ font.charSize
+    for c in s
+        ord = c - ' '
+        if !(0 <= ord < charDims[1]*charDims[2])
+            ord = '_' - ' '
+        end
+        charInd = (mod(ord, charDims[1]), div(ord, charDims[1]))
+        fn(c, charInd .* font.charSize)
+    end
+end
+
+mutable struct FontModel
+    font::FixedFont
+    resolution::NTuple{2, Int32}
+    pipeline::Pipeline
+    uniforms::Ref{Uniforms}
+    uniformBuffer::Buffer
+    vertices::Vector{VertexPosColorUv}
+    indices::Vector{UInt16}
+    numChars::Int32
+    vertexBuffer::Buffer
+    indexBuffer::Buffer
+    bindGroup::WGPUBindGroup
+    function FontModel(device::Device, font::FixedFont, pipeline::Pipeline, sampler::Sampler, resolution::NTuple{2, Int32})
+        uniforms = Ref(Uniforms(SMatrix{4, 4, Float32}(I)))
+        uniformBuffer = Buffer(device, uniforms; label = "font_uniforms", usage = WGPUBufferUsage_Uniform)
+        vertices = Vector{VertexPosColorUv}()
+        vertexBuffer = Buffer(device, typeof(vertices);
+            label = "font_vertices",
+            size = sizeof(VertexPosColorUv) * 2048,
+            usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst,
+        )
+        indices = Vector{UInt16}()
+        indexBuffer = Buffer(device, typeof(indices);
+            label = "font_indices",
+            size = sizeof(UInt16) * 2048 * 6 / 4,
+            usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst,
+        )
+        bindGroup = CreateBindGroup(device.device; 
+            label = "font_bindGroup",
+            layout = pipeline.shader.bindGroupLayouts[1],
+            entries = (
+                (binding = 0, buffer = uniformBuffer.buffer, size = get_size(uniformBuffer),),
+                (binding = 1, sampler = sampler.sampler),
+                (binding = 2, textureView = font.texture.view),
+            ),
+        )
+        fontModel = new(font, resolution, pipeline, uniforms, uniformBuffer, vertices, indices, -1, vertexBuffer, indexBuffer, bindGroup)
+        finalizer(font_model_finalize, fontModel)
+    end
+end
+
+function font_model_finalize(fontModel::FontModel)
+    if fontModel.bindGroup != C_NULL
+        wgpuBindGroupLayoutRelease(fontModel.bindGroup)
+        fontModel.bindGroup = C_NULL
+        finalize(fontModel.uniformBuffer)
+        finalize(fontModel.vertexBuffer)
+        finalize(fontModel.indexBuffer)
+    end
+end
+
+function set_resolution(fontModel::FontModel, resolution::NTuple{2, Int32})
+    fontModel.resolution = resolution
+end
+
+function add_text(fontModel::FontModel, text::String, pos::SVector{2, Int32}, color::SVector{3, Float32})
+    x, y = pos
+    charSize = fontModel.font.charSize
+    texSize = get_size(fontModel.font.texture)[1:2]
+    for_font_chars(fontModel.font, text) do c, pix
+        if c == "\n"
+            x = pos[1]
+            y += charSize[2]
+            return
+        end
+        ul = VertexPosColorUv(vec3f(x, y, 0), color, vec2f(pix[1] / texSize[1], pix[2] / texSize[2]))
+        ur = VertexPosColorUv(vec3f(x + charSize[1], y, 0), color, vec2f((pix[1] + charSize[1]) / texSize[1], pix[2] / texSize[2]))
+        dr = VertexPosColorUv(vec3f(x + charSize[1], y + charSize[2], 0), color, vec2f((pix[1] + charSize[1]) / texSize[1], (pix[2] + charSize[2]) / texSize[2]))
+        dl = VertexPosColorUv(vec3f(x, y + charSize[2], 0), color, vec2f(pix[1] / texSize[1], (pix[2] + charSize[2]) / texSize[2]))
+        baseInd = length(fontModel.vertices)
+        push!(fontModel.vertices, ul, ur, dr, dl)
+        push!(fontModel.indices, baseInd + 0, baseInd + 1, baseInd + 2, baseInd + 0, baseInd + 2, baseInd + 3)
+        x += charSize[1]
+    end        
+end    
+
+function update(device::Device, fontModel::FontModel)
+    # TODO: Resize buffers in case they're too small (and recreate the bind group)
+    @assert(sizeof(fontModel.vertices) <= get_size(fontModel.vertexBuffer))
+    @assert(sizeof(fontModel.indices) <= get_size(fontModel.indexBuffer))
+    fontModel.numChars = length(fontModel.vertices) / 4
+    if fontModel.numChars == 0
+        return
+    end
+    write(device, fontModel.vertexBuffer, fontModel.vertices)
+    write(device, fontModel.indexBuffer, fontModel.indices)
+    empty!(fontModel.vertices)
+    empty!(fontModel.indices)
+    invRes = 1 ./ fontModel.resolution
+    if fontModel.uniforms[].worldViewProj[1,1] != invRes[1] || fontModel.uniforms[].worldViewProj[2,2] != invRes[2]
+        xform = ortho(0f0, Float32(fontModel.resolution[1]), 0f0, Float32(fontModel.resolution[2]), 0f0, 1f0)
+        set_ptr_field!(xform, fontModel.uniforms, :worldViewProj)
+        write(device, fontModel.uniformBuffer, fontModel.uniforms)
+    end
+end
+
+function render(fontModel::FontModel, renderPass::RenderPass)
+    if fontModel.numChars <= 0
+        return
+    end
+    set_pipeline(renderPass, fontModel.pipeline)
+    set_vertex_buffer(renderPass, 0, fontModel.vertexBuffer)
+    set_index_buffer(renderPass, fontModel.indexBuffer)
+    set_bind_group(renderPass, 0, fontModel.bindGroup)
+    draw_indexed(renderPass, fontModel.numChars * 6)
+end
 
 function get_font_bits_10x20()
     bits = BitArray(undef, (120, 160))
@@ -78,15 +204,7 @@ function get_font_bits_10x20()
         0x81, 0x80, 0xe0, 0x0d, 0xc0, 0x03, 0x80, 0x31, 0x00, 0x18, 0xc0, 0x00, 0x00, 0x10, 0x00, 0xc3, 0x80, 0x31, 0x00, 0xf0, 0x00, 0x00, 0x1f, 0x00, 0xf0, 0x7f, 0x00, 0x00, 0x10, 0x00, 0x7e, 0x00,
         0x1f, 0x00, 0x30, 0x00, 0x00, 0x0e, 0x00, 0xe0, 0x3f, 0x00, 0x00, 0x10, 0x00, 0x3c, 0x00, 0x0e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,    
     ])
-    bits
+    transpose(bits)
 end
 
-mutable struct FixedFont
-    charSize::NTuple{2, UInt32}
-    texture::Texture
-    FixedFont(charSize, texture::Texture) = finalizer(fixed_font_finalize, new(convert(NTuple{2, UInt32}, charSize), texture))
-end
-
-fixed_font_finalize(font::FixedFont) = finalize(font.texture)
-
-get_fixed_font_10x20(device::Device)::FixedFont = FixedFont((10, 20), Texture(device, map(x->x*UInt8(255), get_font_bits_10x20()); mipLevelCount = 1))
+fixed_font_10x20(device::Device)::FixedFont = FixedFont((10, 20), Texture(device, map(x->ntuple(i->i <= 3 ? x*UInt8(255) : UInt8(255), 4), get_font_bits_10x20()); mipLevelCount = 1))

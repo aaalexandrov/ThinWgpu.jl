@@ -111,6 +111,9 @@ end
 function draw(renderPass::RenderPass, vertexCount::Integer, instanceCount::Integer = 1, firstVertex::Integer = 0, firstInstance::Integer = 0)
     wgpuRenderPassEncoderDraw(renderPass.encoder, vertexCount, instanceCount, firstVertex, firstInstance)
 end    
+function draw_indexed(renderPass::RenderPass, indexCount::Integer, instanceCount::Integer = 1, firstIndex::Integer = 0, baseVertex::Integer = 0, firstInstance::Integer = 0)
+    wgpuRenderPassEncoderDrawIndexed(renderPass.encoder, indexCount, instanceCount, firstIndex, baseVertex, firstInstance)
+end
 
 function end_pass(renderPass::RenderPass)
     @assert(renderPass.encoder != C_NULL)
