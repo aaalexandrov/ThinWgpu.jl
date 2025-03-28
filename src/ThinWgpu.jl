@@ -118,8 +118,19 @@ function main()
         maxAnisotropy = typemax(UInt16),
     )
 
+    fontPipeline = Pipeline(device, shader;
+        vertex = (buffers = [VertexPosColorUv],),
+        primitive = (topology = WGPUPrimitiveTopology_TriangleList,),
+        multisample = (count = 1, mask = typemax(UInt32),),
+        fragment = (targets = ((
+            format = surface.format, 
+            blend = (color = (srcFactor = WGPUBlendFactor_SrcAlpha, dstFactor = WGPUBlendFactor_OneMinusSrcAlpha,), alpha = (srcFactor = WGPUBlendFactor_One,),),
+            writeMask = WGPUColorWriteMask_All,
+        ),),),
+    )
+
     font = fixed_font_10x20(device)
-    fontModel = FontModel(device, font, pipeline, samplerLinearRepeat, (Int32(1), Int32(1)))
+    fontModel = FontModel(device, font, fontPipeline, samplerLinearRepeat, (Int32(1), Int32(1)))
 
     texture = Texture(device, [ntuple(i->UInt8((isodd(floor(x/64)+floor(y/64)) || i > 3) * 255), 4) for x=1:1024, y=1:1024];
         label = "tex2D",
@@ -179,7 +190,7 @@ function main()
             set_ptr_field!(xform, uniforms, :worldViewProj)
             write(device, uniformBuffer, uniforms)
 
-            add_text(fontModel, "$(round(1e9 / frameDuration; digits = 2)) fps", SVector{2, Int32}(20, 20), SVector{3, Float32}(1, 0, 1))
+            add_text(fontModel, "$(round(1e9 / frameDuration; digits = 2)) fps", SVector{2, Int32}(20, 20), SVector{3, Float32}(0, 0, 0.5), 1.5f0)
             update(device, fontModel)
 
             open(device, commands)
@@ -218,6 +229,7 @@ function main()
     finalize(commands)
     finalize(texture)
     finalize(fontModel)
+    finalize(fontPipeline)
     finalize(font)
     finalize(samplerLinearRepeat)
     finalize(vertexBuffer)

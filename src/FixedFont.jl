@@ -73,24 +73,25 @@ function set_resolution(fontModel::FontModel, resolution::NTuple{2, Int32})
     fontModel.resolution = resolution
 end
 
-function add_text(fontModel::FontModel, text::String, pos::SVector{2, Int32}, color::SVector{3, Float32})
+function add_text(fontModel::FontModel, text::String, pos::SVector{2, Int32}, color::SVector{3, Float32}, scale::Float32 = 1.0f0)
     x, y = pos
     charSize = fontModel.font.charSize
+    scaledCharSize = charSize .* scale
     texSize = get_size(fontModel.font.texture)[1:2]
     for_font_chars(fontModel.font, text) do c, pix
         if c == "\n"
             x = pos[1]
-            y += charSize[2]
+            y += scaledCharSize[2]
             return
         end
-        ul = VertexPosColorUv(vec3f(x, y, 0), color, vec2f(pix[1] / texSize[1], pix[2] / texSize[2]))
-        ur = VertexPosColorUv(vec3f(x + charSize[1], y, 0), color, vec2f((pix[1] + charSize[1]) / texSize[1], pix[2] / texSize[2]))
-        dr = VertexPosColorUv(vec3f(x + charSize[1], y + charSize[2], 0), color, vec2f((pix[1] + charSize[1]) / texSize[1], (pix[2] + charSize[2]) / texSize[2]))
-        dl = VertexPosColorUv(vec3f(x, y + charSize[2], 0), color, vec2f(pix[1] / texSize[1], (pix[2] + charSize[2]) / texSize[2]))
+        ul = VertexPosColorUv(SA_F32[x, y, 0f0], color, SA_F32[pix[1] / texSize[1], pix[2] / texSize[2]])
+        ur = VertexPosColorUv(SA_F32[x + scaledCharSize[1], y, 0f0], color, SA_F32[(pix[1] + charSize[1]) / texSize[1], pix[2] / texSize[2]])
+        dr = VertexPosColorUv(SA_F32[x + scaledCharSize[1], y + scaledCharSize[2], 0f0], color, SA_F32[(pix[1] + charSize[1]) / texSize[1], (pix[2] + charSize[2]) / texSize[2]])
+        dl = VertexPosColorUv(SA_F32[x, y + scaledCharSize[2], 0f0], color, SA_F32[pix[1] / texSize[1], (pix[2] + charSize[2]) / texSize[2]])
         baseInd = length(fontModel.vertices)
         push!(fontModel.vertices, ul, ur, dr, dl)
         push!(fontModel.indices, baseInd + 0, baseInd + 1, baseInd + 2, baseInd + 0, baseInd + 2, baseInd + 3)
-        x += charSize[1]
+        x += scaledCharSize[1]
     end        
 end    
 
@@ -207,4 +208,4 @@ function get_font_bits_10x20()
     transpose(bits)
 end
 
-fixed_font_10x20(device::Device)::FixedFont = FixedFont((10, 20), Texture(device, map(x->ntuple(i->i <= 3 ? x*UInt8(255) : UInt8(255), 4), get_font_bits_10x20()); mipLevelCount = 1))
+fixed_font_10x20(device::Device)::FixedFont = FixedFont((10, 20), Texture(device, map(x->ntuple(i->x*UInt8(255), 4), get_font_bits_10x20()); mipLevelCount = 1))

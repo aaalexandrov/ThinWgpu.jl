@@ -102,7 +102,9 @@ function init_val(::Type{T}, objs::Array{Any}; vals...)::T where T
         z = T(zero(CEnum.basetype(T)))
         typemin(T) <= z <= typemax(T) ? z : typemin(T)
     elseif isstructtype(T)
-        @assert(all(f->f in fieldnames(T), keys(vals)))
+        for k in keys(vals)
+            @assert (k in fieldnames(T)) "Key $k is missing from fieldnames of $(T.name)"
+        end
         params = []
         for (i,f) in pairs(fieldnames(T))
             type = fieldtype(T, f)
